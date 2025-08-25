@@ -1,0 +1,10 @@
+{
+    admin off
+    auto_https off
+}
+
+:{$PORT} {
+    root * /app/dist/public
+    try_files {path} /index.html
+    file_server
+} 

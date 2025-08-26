@@ -4,13 +4,13 @@ import { getAuth, connectAuthEmulator } from 'firebase/auth';
 // Firebase configuration
 // Uses environment variables if provided, otherwise falls back to the supplied project config
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyD9YwUZlFZSKuBytc4N7TIWmEY8wGdwkik",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "trend-e49f8.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "trend-e49f8",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "trend-e49f8.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "587174083064",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:587174083064:web:f0e573c0801eedb47ffe0d",
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-VM7H9NCK35",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDDPg-DEeXutdt_IM9yulxout23hXuSCtQ",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "trend-fiver-platform.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "trend-fiver-platform",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "trend-fiver-platform.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "613728497767",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:613728497767:web:ac8fb50c8bbd400c9824c2",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-XP6E3GNWTC",
 };
 
 // Initialize Firebase

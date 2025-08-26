@@ -6,6 +6,8 @@ import { useAuth } from '../hooks/use-auth';
 import { AlertCircle, TrendingUp, TrendingDown } from 'lucide-react';
 import { Button } from './ui/button';
 import { BarChart3 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { RefreshCw } from 'lucide-react';
 
 interface SentimentData {
   slotNumber: number;
@@ -25,12 +27,14 @@ interface SentimentChartProps {
   assetSymbol: string;
   duration: string;
   className?: string;
+  onDurationChange?: (duration: string) => void;
 }
 
 const SentimentChart: React.FC<SentimentChartProps> = ({ 
   assetSymbol, 
   duration, 
-  className = '' 
+  className = '', 
+  onDurationChange 
 }) => {
   const { user } = useAuth();
   const [sentimentData, setSentimentData] = useState<SentimentData[]>([]);
@@ -240,9 +244,51 @@ const SentimentChart: React.FC<SentimentChartProps> = ({
 
   return (
     <Card className={className}>
-      <CardHeader>
-        <CardTitle>Market Sentiment</CardTitle>
-      </CardHeader>
+      {/* Header with controls */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-primary" />
+                Market Sentiment - {assetSymbol}
+              </CardTitle>
+              <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
+                <span>Duration:</span>
+                {onDurationChange ? (
+                  <Select value={duration} onValueChange={onDurationChange}>
+                    <SelectTrigger className="w-32 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {['1h', '3h', '6h', '24h', '48h', '1w', '1m', '3m', '6m', '1y'].map(d => (
+                        <SelectItem key={d} value={d}>{d}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Badge variant="outline">{duration}</Badge>
+                )}
+                <Badge variant={user?.emailVerified ? "default" : "secondary"} className="ml-2">
+                  {user?.emailVerified ? "Live" : "Offline"}
+                </Badge>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchSentimentData}
+                disabled={loading}
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
+
       <CardContent>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Side-by-side cards with progress bars */}

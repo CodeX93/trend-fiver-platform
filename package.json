@@ -4,10 +4,10 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development DATABASE_URL=postgresql://postgres:password@localhost:5432/trend_db JWT_SECRET=your-secret-key-change-this-in-production PORT=5000 FRONTEND_URL=http://localhost:5173 BASE_URL=http://localhost:5173 FROM_EMAIL=noreply@trend-app.com BREVO_API_KEY=your-brevo-api-key tsx server/index.ts",
+         "dev": "cross-env NODE_ENV=development DATABASE_URL=postgresql://postgres:whuNzOsLTDlSofgICDhLOWXNvwfFvTVO@maglev.proxy.rlwy.net:35191/railway JWT_SECRET=your-secret-key-change-this-in-production PORT=3001 FRONTEND_URL=http://localhost:5173 BASE_URL=http://localhost:5173 FROM_EMAIL=noreply@trend-app.com BREVO_API_KEY=your-brevo-api-key FIREBASE_PROJECT_ID=trend-fiver-platform EXCHANGERATE_API_KEY=535d82b57fa2cdc35abd9f96 tsx server/index.ts",
     "dev:win": "tsx server/index.ts",
     "dev:frontend": "vite",
-    "dev:backend": "cross-env NODE_ENV=development DATABASE_URL=postgresql://postgres:password@localhost:5432/trend_db JWT_SECRET=your-secret-key-change-this-in-production PORT=5000 FRONTEND_URL=http://localhost:5173 BASE_URL=http://localhost:5173 FROM_EMAIL=noreply@trend-app.com BREVO_API_KEY=your-brevo-api-key tsx server/index.ts",
+         "dev:backend": "cross-env NODE_ENV=development DATABASE_URL=postgresql://postgres:whuNzOsLTDlSofgICDhLOWXNvwfFvTVO@maglev.proxy.rlwy.net:35191/railway JWT_SECRET=your-secret-key-change-this-in-production PORT=3002 FRONTEND_URL=http://localhost:5173 BASE_URL=http://localhost:5173 FROM_EMAIL=noreply@trend-app.com BREVO_API_KEY=your-brevo-api-key FIREBASE_PROJECT_ID=trend-fiver-platform EXCHANGERATE_API_KEY=535d82b57fa2cdc35abd9f96 tsx server/index.ts",
     "build": "vite build",
     "start": "cross-env NODE_ENV=production tsx server/index.ts",
     "check": "tsc",

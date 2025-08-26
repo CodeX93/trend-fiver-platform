@@ -105,58 +105,67 @@ export default function HomePage() {
           </Card>
         </section>
 
-        {/* Market Overview Section */}
-        <section className="mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <Card className="md:col-span-1">
+        {/* Asset Statistics */}
+        <div className="mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{t("home.total_assets")}</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Assets</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center">
-                  <BarChart3 className="h-5 w-5 text-primary mr-2" />
-                  <div className="text-2xl font-bold">{isLoading ? <Skeleton className="h-8 w-12" /> : totalAssets}</div>
-                </div>
+                <div className="text-2xl font-bold">{totalAssets}</div>
+                <p className="text-xs text-muted-foreground">
+                  {activeAssets} active
+                </p>
               </CardContent>
             </Card>
             
-            <Card className="md:col-span-1">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{t("home.cryptocurrencies")}</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Coins className="h-4 w-4 text-yellow-500" />
+                  Cryptocurrencies
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center">
-                  <Bitcoin className="h-5 w-5 text-yellow-500 mr-2" />
-                  <div className="text-2xl font-bold">{isLoading ? <Skeleton className="h-8 w-12" /> : cryptoCount}</div>
-                </div>
+                <div className="text-2xl font-bold">{cryptoCount}</div>
+                <p className="text-xs text-muted-foreground">
+                  {cryptoAssets.filter(asset => asset.isActive).length} active
+                </p>
               </CardContent>
             </Card>
             
-            <Card className="md:col-span-1">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{t("home.stocks")}</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <LineChart className="h-4 w-4 text-blue-500" />
+                  Stocks
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center">
-                  <TrendingUp className="h-5 w-5 text-green-500 mr-2" />
-                  <div className="text-2xl font-bold">{isLoading ? <Skeleton className="h-8 w-12" /> : stocksCount}</div>
-                </div>
+                <div className="text-2xl font-bold">{stocksCount}</div>
+                <p className="text-xs text-muted-foreground">
+                  {stockAssets.filter(asset => asset.isActive).length} active
+                </p>
               </CardContent>
             </Card>
             
-            <Card className="md:col-span-1">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{t("home.forex")}</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-green-500" />
+                  Forex Pairs
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center">
-                  <DollarSign className="h-5 w-5 text-blue-500 mr-2" />
-                  <div className="text-2xl font-bold">{isLoading ? <Skeleton className="h-8 w-12" /> : forexCount}</div>
-                </div>
+                <div className="text-2xl font-bold">{forexCount}</div>
+                <p className="text-xs text-muted-foreground">
+                  {forexAssets.filter(asset => asset.isActive).length} active
+                </p>
               </CardContent>
             </Card>
           </div>
-        </section>
+        </div>
 
         {/* Current Month Progress */}
         <section className="mb-8">

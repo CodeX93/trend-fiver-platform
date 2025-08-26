@@ -17,22 +17,54 @@ export default function EmailVerificationStatus() {
   
   const resendMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest('POST', '/api/resend-verification');
+      const res = await apiRequest('POST', '/api/auth/resend-verification');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to resend verification email');
+      }
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
         title: t('email_verification.resend_success_title'),
         description: t('email_verification.resend_success_desc'),
         variant: "default",
       });
+      
+      // Show cooldown info if provided
+      if (data.cooldown) {
+        const cooldownMinutes = Math.ceil(data.cooldown / 1000 / 60);
+        toast({
+          title: "Cooldown Active",
+          description: `You can request another verification email in ${cooldownMinutes} minutes`,
+          variant: "default",
+        });
+      }
     },
     onError: (error: Error) => {
-      toast({
-        title: t('email_verification.resend_error_title'),
-        description: error.message,
-        variant: "destructive",
-      });
+      // Handle cooldown errors specifically
+      if (error.message.includes('Please wait')) {
+        const match = error.message.match(/(\d+) minutes/);
+        if (match) {
+          toast({
+            title: "Cooldown Active",
+            description: t('email_verification.cooldown_message', { minutes: match[1] }),
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: t('email_verification.resend_error_title'),
+            description: error.message,
+            variant: "destructive",
+          });
+        }
+      } else {
+        toast({
+          title: t('email_verification.resend_error_title'),
+          description: error.message,
+          variant: "destructive",
+        });
+      }
     },
   });
   

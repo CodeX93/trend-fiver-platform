@@ -340,11 +340,13 @@ export default function AdminPage() {
       
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
-        title: "Price update triggered",
-        description: "Asset prices are being updated.",
+        title: "Price Update Successful",
+        description: data.success ? `Updated ${data.assetsUpdated || 'all'} assets in ${data.duration || 'successfully'}` : "Asset prices updated",
       });
+      // Refresh asset data
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
     },
     onError: () => {
       toast({
@@ -355,7 +357,44 @@ export default function AdminPage() {
     }
   });
 
-  
+  // Badge backfill mutation
+  const badgeBackfillMutation = useMutation({
+    mutationFn: async () => {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+      
+      const response = await fetch("/api/admin/badges/backfill", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to trigger badge backfill`);
+      }
+      
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Badge Backfill Successful",
+        description: `Awarded ${data.totalBadgesAwarded} badges to ${data.usersWithNewBadges} users`,
+      });
+      // Refresh user data
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+    },
+    onError: () => {
+      toast({
+        variant: "destructive",
+        title: "Failed to trigger badge backfill",
+        description: "There was an error triggering the badge backfill.",
+      });
+    }
+  });
 
   // Filter assets based on type and search query
   const filteredAssets = (assets || []).filter(asset => {
@@ -408,6 +447,12 @@ export default function AdminPage() {
     setSelectedUserForHistory(userId);
     setUserHistoryDialogOpen(true);
   };
+
+  const handleBadgeBackfill = () => {
+    badgeBackfillMutation.mutate();
+  };
+
+
 
   const refreshData = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
@@ -493,6 +538,60 @@ export default function AdminPage() {
                     <CardContent>
                       <div className="text-2xl font-bold">
                         {statsLoading ? <Skeleton className="h-8 w-16" /> : adminStats?.totalPredictions || 0}
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                      <CardTitle className="text-sm font-medium">Price Update</CardTitle>
+                      <RefreshCcw className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        <div className="text-sm text-muted-foreground">Manual trigger</div>
+                        <Button 
+                          size="sm" 
+                          onClick={() => triggerPriceUpdateMutation.mutate()}
+                          disabled={triggerPriceUpdateMutation.isPending}
+                          className="w-full"
+                        >
+                          {triggerPriceUpdateMutation.isPending ? (
+                            <>
+                              <RefreshCcw className="h-4 w-4 mr-2 animate-spin" />
+                              Updating...
+                            </>
+                          ) : (
+                            'Update Prices'
+                          )}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                      <CardTitle className="text-sm font-medium">Badge Backfill</CardTitle>
+                      <Award className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        <div className="text-sm text-muted-foreground">Award badges to existing users</div>
+                        <Button 
+                          size="sm" 
+                          onClick={() => handleBadgeBackfill()}
+                          disabled={badgeBackfillMutation.isPending}
+                          className="w-full"
+                        >
+                          {badgeBackfillMutation.isPending ? (
+                            <>
+                              <RefreshCcw className="h-4 w-4 mr-2 animate-spin" />
+                              Processing...
+                            </>
+                          ) : (
+                            'Backfill Badges'
+                          )}
+                        </Button>
                       </div>
                     </CardContent>
                   </Card>

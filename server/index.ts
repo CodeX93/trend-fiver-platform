@@ -4,7 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { createServer } from 'http';
-import routes from './routes';
+import routes, { setWebSocketService } from './routes';
 import { schedulePriceUpdates } from './price-service';
 import { scheduleMonthlyLeaderboardProcessing } from './leaderboard-service';
 import { initializeSlotConfigs } from './slot-service';
@@ -21,6 +21,9 @@ const PORT = process.env.PORT || 5000;
 
 // Initialize WebSocket service
 const wsService = new WebSocketService(server);
+
+// Connect WebSocket service to routes
+setWebSocketService(wsService);
 
 // CORS configuration
 const allowedOrigins = [

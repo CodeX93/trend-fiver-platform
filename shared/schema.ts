@@ -138,10 +138,13 @@ export const monthlyLeaderboards = pgTable("monthly_leaderboards", {
 export const userBadges = pgTable("user_badges", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  badgeType: text("badge_type").notNull(), // "1st_place", "2nd_place", "3rd_place", "4th_place"
-  monthYear: text("month_year").notNull(), // "2025-01"
-  rank: integer("rank").notNull(),
-  totalScore: integer("total_score").notNull(),
+  badgeType: text("badge_type").notNull(), // "starter", "streak", "accuracy", "volume", "1st_place", etc.
+  badgeName: text("badge_name").notNull(), // Human readable name
+  badgeDescription: text("badge_description").notNull(), // Description of how it was earned
+  monthYear: text("month_year").notNull(), // "2025-01" or "lifetime" for permanent badges
+  rank: integer("rank"), // For ranking badges (1st, 2nd, 3rd place)
+  totalScore: integer("total_score"), // For ranking badges
+  metadata: jsonb("metadata"), // Additional data like streak count, accuracy percentage, etc.
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -331,9 +331,59 @@ export async function getBadgeData() {
 }
 
 export async function triggerPriceUpdate() {
-  // This would trigger a price update
-  // For now, return a placeholder
-  return { success: true, message: 'Price update triggered' };
+  try {
+    console.log('Admin triggered manual price update at:', new Date().toISOString());
+    
+    // Import price service functions
+    const { updateAllPrices, updateForexPrices } = await import('./price-service');
+    
+    // Start the price update process
+    const startTime = Date.now();
+    
+    // Update all prices (crypto, stocks, forex)
+    await updateAllPrices();
+    
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    
+    // Log the successful update
+    console.log(`Manual price update completed successfully in ${duration}ms`);
+    
+    // Get updated asset count for verification
+    const { getAllAssets } = await import('./price-service');
+    const assets = await getAllAssets();
+    const activeAssets = assets.filter(asset => asset.isActive);
+    
+    const result = {
+      success: true,
+      message: 'Price update completed successfully',
+      timestamp: new Date().toISOString(),
+      duration: `${duration}ms`,
+      assetsUpdated: activeAssets.length,
+      details: {
+        crypto: activeAssets.filter(asset => asset.type === 'crypto').length,
+        stocks: activeAssets.filter(asset => asset.type === 'stock').length,
+        forex: activeAssets.filter(asset => asset.type === 'forex').length
+      }
+    };
+    
+    console.log('Price update result:', result);
+    return result;
+    
+  } catch (error) {
+    console.error('Manual price update failed:', error);
+    
+    const errorResult = {
+      success: false,
+      message: 'Price update failed',
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? error.message : 'Unknown error',
+      details: 'Check server logs for more information'
+    };
+    
+    console.error('Price update error result:', errorResult);
+    return errorResult;
+  }
 }
 
 export async function getSystemHealth() {

@@ -245,55 +245,75 @@ class WebSocketService {
     }
   }
 
-  // Public methods for broadcasting updates
-  public broadcastSlotUpdate(duration: '24h' | '7d' | '30d') {
-    const update: SlotUpdate = {
-      type: 'slot_update',
-      duration,
-      currentSlot: this.getCurrentSlot(duration),
-      timeRemaining: 0,
-      nextSlotStart: Date.now(),
-    };
-
-    this.broadcast(update);
-  }
-
-  public broadcastSentimentUpdate(assetSymbol: string, duration: '24h' | '7d' | '30d', data: any) {
-    const update: SentimentUpdate = {
+  // Broadcast sentiment update to all connected clients
+  public broadcastSentimentUpdate(assetSymbol: string, duration: string, data: any): void {
+    const message: SentimentUpdate = {
       type: 'sentiment_update',
       assetSymbol,
-      duration,
-      data,
+      duration: duration as any,
+      data
     };
 
-    this.broadcast(update);
+    this.broadcastMessage(message);
+    console.log(`Broadcasting sentiment update for ${assetSymbol} (${duration})`);
   }
 
-  public broadcastPredictionUpdate(assetSymbol: string, duration: '24h' | '7d' | '30d', slotNumber: number, upCount: number, downCount: number) {
-    const update: PredictionUpdate = {
+  // Broadcast prediction update to all connected clients
+  public broadcastPredictionUpdate(assetSymbol: string, duration: string, slotNumber: number, upCount: number, downCount: number): void {
+    const message: PredictionUpdate = {
       type: 'prediction_update',
       assetSymbol,
-      duration,
+      duration: duration as any,
       slotNumber,
       upCount,
-      downCount,
+      downCount
     };
 
-    this.broadcast(update);
+    this.broadcastMessage(message);
+    console.log(`Broadcasting prediction update for ${assetSymbol} (${duration}) slot ${slotNumber}`);
   }
 
-  private broadcast(message: WebSocketMessage) {
+  // Broadcast slot update to all connected clients
+  public broadcastSlotUpdate(duration: string, currentSlot: number, timeRemaining: number, nextSlotStart: number): void {
+    const message: SlotUpdate = {
+      type: 'slot_update',
+      duration: duration as any,
+      currentSlot,
+      timeRemaining,
+      nextSlotStart
+    };
+
+    this.broadcastMessage(message);
+    console.log(`Broadcasting slot update for ${duration}`);
+  }
+
+  // Generic message broadcasting
+  private broadcastMessage(message: WebSocketMessage): void {
     const messageStr = JSON.stringify(message);
     
-    for (const client of this.clients.values()) {
+    this.wss.clients.forEach((client: any) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(messageStr);
+        try {
+          client.send(messageStr);
+        } catch (error) {
+          console.error('Error sending WebSocket message:', error);
+        }
       }
-    }
+    });
   }
 
+  // Get connected clients count
   public getConnectedClientsCount(): number {
-    return this.clients.size;
+    return this.wss.clients.size;
+  }
+
+  // Get client info for debugging
+  public getClientInfo(): Array<{ userId?: string; username?: string; isAuthenticated: boolean }> {
+    return Array.from(this.clients.values()).map(client => ({
+      userId: client.userId,
+      username: client.username,
+      isAuthenticated: client.isAuthenticated || false
+    }));
   }
 }
 

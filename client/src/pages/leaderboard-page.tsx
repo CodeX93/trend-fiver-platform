@@ -8,24 +8,30 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Lock, Trophy, Medal, User2, Star, Calendar, Award, Shield, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
+import { Lock, Trophy, Medal, User2, Star, Calendar, Award, Shield, TrendingUp, TrendingDown, BarChart3, Filter, Crown, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { MonthlyLeaderboard, UserBadge } from "@shared/schema";
+import { MonthCountdown } from "@/components/month-countdown";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 export default function LeaderboardPage() {
   const { user } = useAuth();
   const [selectedMonth, setSelectedMonth] = useState<string>("");
+  const [includeAdmins, setIncludeAdmins] = useState<boolean>(true);
   
   // Get current month in YYYY-MM format
   const currentMonth = new Date().toISOString().slice(0, 7);
   
-  // Fetch monthly leaderboard data
-  const { data: leaderboardData, isLoading } = useQuery<MonthlyLeaderboard[]>({
-    queryKey: ["/api/leaderboard", selectedMonth || "previous"],
+  // Fetch monthly leaderboard data (type updated to match new backend response)
+  const { data: leaderboardData, isLoading } = useQuery<{
+    month: string; includeAdmins: boolean; data: Array<MonthlyLeaderboard & { isAdmin?: boolean; badges: string[] }>; total: number; timestamp: string; timezone: string;
+  }>({
+    queryKey: ["/api/leaderboard", selectedMonth || "previous", includeAdmins],
     queryFn: async () => {
       const month = selectedMonth || "previous";
-      const response = await fetch(`/api/leaderboard?month=${month}`);
+      const response = await fetch(`/api/leaderboard?month=${month}&includeAdmins=${includeAdmins}`);
       if (!response.ok) {
         throw new Error('Failed to fetch leaderboard data');
       }
@@ -33,11 +39,13 @@ export default function LeaderboardPage() {
     },
   });
 
-  // Fetch current month leaderboard
-  const { data: currentMonthData } = useQuery<MonthlyLeaderboard[]>({
-    queryKey: ["/api/leaderboard/current"],
+  // Fetch current month leaderboard (type updated to match new backend response)
+  const { data: currentMonthData } = useQuery<{
+    month: string; includeAdmins: boolean; data: Array<MonthlyLeaderboard & { isAdmin?: boolean; badges: string[] }>; total: number; timestamp: string; timezone: string;
+  }>({
+    queryKey: ["/api/leaderboard/current", includeAdmins],
     queryFn: async () => {
-      const response = await fetch('/api/leaderboard/current');
+      const response = await fetch(`/api/leaderboard/current?includeAdmins=${includeAdmins}`);
       if (!response.ok) {
         throw new Error('Failed to fetch current month data');
       }
@@ -46,13 +54,22 @@ export default function LeaderboardPage() {
   });
 
   // Fetch user's current month stats
-  const { data: userStats } = useQuery({
+  const { data: userStats } = useQuery<{
+    currentRank: number;
+    monthlyScore: number;
+    totalPredictions: number;
+    accuracyPercentage: number;
+    isAdmin: boolean;
+  }>({
     queryKey: ["/api/leaderboard/user"],
     enabled: !!user,
   });
 
   // Fetch leaderboard stats
-  const { data: leaderboardStats } = useQuery({
+  const { data: leaderboardStats } = useQuery<{
+    currentMonth: { participants: number; monthYear: string };
+    previousMonth: { participants: number; monthYear: string };
+  }>({
     queryKey: ["/api/leaderboard/stats"],
   });
   
@@ -99,243 +116,331 @@ export default function LeaderboardPage() {
     return (correct / total) * 100;
   };
 
+  const formatTimestamp = (timestamp: string, timezone: string) => {
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+    } catch {
+      return 'Invalid date';
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <AppHeader />
-      <main className="container max-w-6xl mx-auto px-4 py-6">
-        <div className="flex flex-col space-y-8">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight mb-2">
-              Monthly Leaderboard
-            </h1>
-            <p className="text-muted-foreground">
-              Top 30 predictors from the previous month
-            </p>
-          </div>
+      
+      <div className="container mx-auto px-4 py-8">
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-center mb-2">🏆 Leaderboard</h1>
+          <p className="text-center text-muted-foreground">
+            Compete with traders worldwide and climb the ranks
+          </p>
+        </div>
 
-          <Card>
+        {/* Month Countdown */}
+        <div className="mb-6">
+          <MonthCountdown />
+        </div>
+
+        {/* Admin Filter Toggle */}
+        <div className="mb-6 flex items-center justify-center space-x-2">
+          <Switch
+            id="include-admins"
+            checked={includeAdmins}
+            onCheckedChange={setIncludeAdmins}
+          />
+          <Label htmlFor="include-admins" className="text-sm">
+            {includeAdmins ? 'Include Admins' : 'Exclude Admins'}
+          </Label>
+          <Badge variant="outline" className="ml-2">
+            {includeAdmins ? 'All Users' : 'Regular Users Only'}
+          </Badge>
+        </div>
+
+        {/* Month Selection */}
+        <div className="mb-6 flex justify-center">
+          <div className="flex space-x-2">
+            <Button
+              variant={selectedMonth === "" ? "default" : "outline"}
+              onClick={() => setSelectedMonth("")}
+            >
+              Previous Month
+            </Button>
+            <Button
+              variant={selectedMonth === "current" ? "default" : "outline"}
+              onClick={() => setSelectedMonth("current")}
+            >
+              Current Month
+            </Button>
+            <Button
+              variant={selectedMonth === currentMonth ? "default" : "outline"}
+              onClick={() => setSelectedMonth(currentMonth)}
+            >
+              {getMonthLabel(currentMonth)}
+            </Button>
+          </div>
+        </div>
+
+        {/* Leaderboard Stats */}
+        {leaderboardStats && (
+          <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Current Month Participants
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{leaderboardStats.currentMonth?.participants || 0}</div>
+                <p className="text-xs text-muted-foreground">
+                  {leaderboardStats.currentMonth?.monthYear || 'Current Month'}
+                </p>
+              </CardContent>
+            </Card>
+            
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Trophy className="h-4 w-4" />
+                  Previous Month Participants
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{leaderboardStats.previousMonth?.participants || 0}</div>
+                <p className="text-xs text-muted-foreground">
+                  {leaderboardStats.previousMonth?.monthYear || 'Previous Month'}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* User Stats */}
+        {userStats && (
+          <Card className="mb-6">
             <CardHeader>
-              <CardTitle className="flex items-center">
-                <Trophy className="h-5 w-5 mr-2 text-primary" />
-                Previous Month Results
+              <CardTitle className="flex items-center gap-2">
+                <User2 className="h-5 w-5" />
+                Your Current Month Stats
               </CardTitle>
-              <CardDescription>
-                Final rankings from the previous month with permanent badges for Top 4
-              </CardDescription>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-primary">{userStats.currentRank || 'Unranked'}</div>
+                  <div className="text-xs text-muted-foreground">Current Rank</div>
                 </div>
-              ) : leaderboardData && leaderboardData.length > 0 ? (
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-16">Rank</TableHead>
-                        <TableHead>Predictor</TableHead>
-                        <TableHead className="text-right">Total Score</TableHead>
-                        <TableHead className="text-right">Predictions</TableHead>
-                        <TableHead className="text-right">Accuracy</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {leaderboardData.map((predictor) => (
-                        <TableRow key={predictor.id}>
-                          <TableCell className="font-medium">
-                            <div className="flex items-center justify-center">
-                              {getRankBadge(predictor.rank)}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center">
-                              <User2 className="h-5 w-5 mr-2 text-muted-foreground" />
-                              <Link href={`/user/${predictor.username}`} className="font-medium hover:text-primary transition-colors">
-                                {predictor.username}
-                              </Link>
-                              {predictor.rank <= 4 && (
-                                <Badge variant="secondary" className="ml-2">
-                                  {predictor.rank === 1 && "🥇 Champion"}
-                                  {predictor.rank === 2 && "🥈 Runner-up"}
-                                  {predictor.rank === 3 && "🥉 Bronze"}
-                                  {predictor.rank === 4 && "🎖️ Top 4"}
-                                </Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end">
-                              <TrendingUp className="h-4 w-4 mr-1 text-green-500" />
-                              <span className="font-medium">{predictor.totalScore}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {predictor.correctPredictions} / {predictor.totalPredictions}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end">
-                              <Star className="h-4 w-4 mr-1 text-yellow-500" />
-                              <span className="font-medium">
-                                {predictor.accuracyPercentage.toFixed(1)}%
-                              </span>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600">{userStats.monthlyScore || 0}</div>
+                  <div className="text-xs text-muted-foreground">Monthly Score</div>
                 </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Trophy className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
-                  <p>No leaderboard data available for this month</p>
-                  <p className="text-sm">Leaderboards are finalized at the end of each month</p>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-600">{userStats.totalPredictions || 0}</div>
+                  <div className="text-xs text-muted-foreground">Total Predictions</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-purple-600">
+                    {userStats.accuracyPercentage ? userStats.accuracyPercentage.toFixed(1) : 0}%
+                  </div>
+                  <div className="text-xs text-muted-foreground">Accuracy</div>
+                </div>
+              </div>
+              {userStats.isAdmin && (
+                <div className="mt-3 flex justify-center">
+                  <Badge variant="secondary" className="flex items-center gap-1">
+                    <Crown className="h-3 w-3" />
+                    Admin User
+                  </Badge>
                 </div>
               )}
             </CardContent>
           </Card>
+        )}
 
-          {/* Current Month Progress */}
-          {currentMonthData && currentMonthData.length > 0 && (
+        {/* Leaderboard Tabs */}
+        <Tabs defaultValue="monthly" className="space-y-4">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="monthly">Monthly Rankings</TabsTrigger>
+            <TabsTrigger value="current">Live Current Month</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="monthly" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Calendar className="h-5 w-5 mr-2 text-primary" />
-                  Current Month Progress
+                <CardTitle className="flex items-center gap-2">
+                  <Trophy className="h-5 w-5" />
+                  {selectedMonth === "" ? "Previous Month" : selectedMonth === "current" ? "Current Month" : getMonthLabel(selectedMonth)} Leaderboard
                 </CardTitle>
                 <CardDescription>
-                  Live rankings for the current month (updates in real-time)
+                  {leaderboardData && (
+                    <div className="flex items-center justify-between">
+                      <span>Top {leaderboardData.total} participants</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>Timezone: {leaderboardData.timezone || 'Europe/Berlin'}</span>
+                        {leaderboardData.timestamp && (
+                          <span>Updated: {formatTimestamp(leaderboardData.timestamp, leaderboardData.timezone)}</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border">
+
+                {isLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(10)].map((_, i) => (
+                      <div key={i} className="flex items-center space-x-4">
+                        <Skeleton className="h-4 w-8" />
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-4 w-16" />
+                        <Skeleton className="h-4 w-16" />
+                        <Skeleton className="h-4 w-16" />
+                      </div>
+                    ))}
+                  </div>
+                ) : leaderboardData?.data ? (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-16">Rank</TableHead>
-                        <TableHead>Predictor</TableHead>
-                        <TableHead className="text-right">Monthly Score</TableHead>
-                        <TableHead className="text-right">Predictions</TableHead>
+                        <TableHead>Rank</TableHead>
+                        <TableHead>User</TableHead>
+                        <TableHead>Score</TableHead>
+                        <TableHead>Predictions</TableHead>
+                        <TableHead>Accuracy</TableHead>
+                        <TableHead>Badges</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {(currentMonthData || []).slice(0, 10).map((predictor) => (
-                        <TableRow key={predictor.id}>
-                          <TableCell className="font-medium">
-                            <span className="text-sm font-medium">#{predictor.rank}</span>
-                          </TableCell>
+                      {leaderboardData.data.map((entry) => (
+                        <TableRow key={entry.userId}>
+                          <TableCell>{getRankBadge(entry.rank)}</TableCell>
                           <TableCell>
-                            <div className="flex items-center">
-                              <User2 className="h-5 w-5 mr-2 text-muted-foreground" />
-                              <Link href={`/user/${predictor.username}`} className="font-medium hover:text-primary transition-colors">
-                                {predictor.username}
-                              </Link>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{entry.username}</span>
+                              {entry.isAdmin && (
+                                <Badge variant="secondary" className="flex items-center gap-1 text-xs">
+                                  <Crown className="h-3 w-3" />
+                                  Admin
+                                </Badge>
+                              )}
                             </div>
                           </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end">
-                              <TrendingUp className="h-4 w-4 mr-1 text-green-500" />
-                              <span className="font-medium">{predictor.totalScore}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {predictor.totalPredictions}
-                          </TableCell>
+                          <TableCell className="font-mono">{entry.totalScore}</TableCell>
+                          <TableCell>{entry.totalPredictions}</TableCell>
+                          <TableCell>{entry.accuracyPercentage ? parseFloat(entry.accuracyPercentage.toString()).toFixed(1) : '0.0'}%</TableCell>
+                                                     <TableCell>
+                             <div className="flex gap-1">
+                               {entry.badges?.map((badge, index) => (
+                                 <Badge key={index} variant="outline" className="text-xs">
+                                   {badge}
+                                 </Badge>
+                               )) || <span className="text-muted-foreground">No badges</span>}
+                             </div>
+                           </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
-                </div>
-                <div className="mt-4 text-center text-sm text-muted-foreground">
-                  <p>Showing top 10 of current month. Final rankings will be available at month end.</p>
-                </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <div className="mb-4">
+                      <strong>No leaderboard data available</strong>
+                    </div>
+                    <div className="text-sm">
+                      <p>This could be because:</p>
+                      <ul className="list-disc list-inside mt-2 space-y-1">
+                        <li>No users have made predictions yet</li>
+                        <li>The month hasn't ended (for previous month data)</li>
+                        <li>There's an issue with data fetching</li>
+                      </ul>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => window.location.reload()}
+                      className="mt-4"
+                    >
+                      Refresh Page
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
-          )}
-          
-          <div className="bg-muted rounded-lg p-6">
-            <div className="flex flex-col md:flex-row md:items-start justify-between gap-6">
-              <div>
-                <h3 className="text-xl font-bold mb-2">How the Leaderboard Works</h3>
-                <ul className="list-disc list-inside space-y-2 text-muted-foreground">
-                  <li>Users earn points based on correct predictions and slot timing</li>
-                  <li>Earlier slots offer higher rewards but greater risk</li>
-                  <li>Monthly leaderboards are finalized on the 1st of each month</li>
-                  <li>Top 4 users receive permanent badges for their achievement</li>
-                  <li className="font-medium text-foreground">Scoring System:</li>
-                  <ul className="list-circle list-inside ml-5 space-y-1">
-                    <li>Correct prediction: +slot points</li>
-                    <li>Incorrect prediction: -50% of slot points (minimum -1)</li>
-                    <li>Earlier slots = higher potential rewards</li>
-                  </ul>
-                </ul>
-              </div>
-              <div className="bg-card rounded-md p-4 border shadow-sm flex flex-col items-center md:min-w-[180px]">
-                <h4 className="font-medium mb-2">Your Current Status</h4>
-                {userStats ? (
-                  <>
-                    <div className="text-4xl font-bold mb-1 text-primary">
-                      {userStats.rank ? `#${userStats.rank}` : "Unranked"}
-                    </div>
-                    <div className="text-sm text-muted-foreground text-center">
-                      {userStats.score || 0} points this month
-                    </div>
-                    <div className="text-xs text-muted-foreground text-center mt-1">
-                      {userStats.totalPredictions || 0} predictions
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-4xl font-bold mb-1 text-muted-foreground">
-                      --
-                    </div>
-                    <div className="text-sm text-muted-foreground text-center">
-                      Make predictions to appear on the leaderboard
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
+          </TabsContent>
 
-          {/* Leaderboard Stats */}
-          {leaderboardStats && (
+          <TabsContent value="current" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <BarChart3 className="h-5 w-5 mr-2 text-primary" />
-                  Leaderboard Statistics
+                <CardTitle className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5" />
+                  Live Current Month Rankings
                 </CardTitle>
+                <CardDescription>
+                  {currentMonthData && (
+                    <div className="flex items-center justify-between">
+                      <span>Live scores updated in real-time</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>Timezone: {currentMonthData.timezone || 'Europe/Berlin'}</span>
+                        {currentMonthData.timestamp && (
+                          <span>Updated: {formatTimestamp(currentMonthData.timestamp, currentMonthData.timezone)}</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-primary">{leaderboardStats.totalUsers || 0}</div>
-                    <div className="text-sm text-muted-foreground">Total Users</div>
+                {currentMonthData?.data ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Rank</TableHead>
+                        <TableHead>User</TableHead>
+                        <TableHead>Score</TableHead>
+                        <TableHead>Predictions</TableHead>
+                        <TableHead>Accuracy</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentMonthData.data.map((entry) => (
+                        <TableRow key={entry.userId}>
+                          <TableCell>{getRankBadge(entry.rank)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{entry.username}</span>
+                                                             {entry.isAdmin && (
+                                 <Badge variant="secondary" className="flex items-center gap-1 text-xs">
+                                   <Crown className="h-3 w-3" />
+                                   Admin
+                                 </Badge>
+                               )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono">{entry.totalScore}</TableCell>
+                          <TableCell>{entry.totalPredictions}</TableCell>
+                          <TableCell>{entry.accuracyPercentage ? parseFloat(entry.accuracyPercentage.toString()).toFixed(1) : '0.0'}%</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No current month data available
                   </div>
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-green-500">{leaderboardStats.totalPredictions || 0}</div>
-                    <div className="text-sm text-muted-foreground">Total Predictions</div>
-                  </div>
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-blue-500">{leaderboardStats.averageAccuracy || 0}%</div>
-                    <div className="text-sm text-muted-foreground">Avg Accuracy</div>
-                  </div>
-                  <div className="text-center p-3 border rounded-lg">
-                    <div className="text-2xl font-bold text-yellow-500">{leaderboardStats.topScore || 0}</div>
-                    <div className="text-sm text-muted-foreground">Top Score</div>
-                  </div>
-                </div>
+                )}
               </CardContent>
             </Card>
-          )}
-        </div>
-      </main>
+          </TabsContent>
+        </Tabs>
+      </div>
     </div>
   );
 }

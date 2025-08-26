@@ -118,8 +118,8 @@ export async function getUserBadges(userId: string): Promise<Array<{
   return badges.map(badge => ({
     badgeType: badge.badgeType,
     monthYear: badge.monthYear,
-    rank: badge.rank,
-    totalScore: badge.totalScore,
+    rank: badge.rank || 0,
+    totalScore: badge.totalScore || 0,
   }));
 }
 
@@ -167,7 +167,7 @@ export async function processMonthlyLeaderboard() {
       totalScore: profile.monthlyScore,
       totalPredictions: profile.totalPredictions,
       correctPredictions: profile.correctPredictions,
-      accuracyPercentage: Math.round(accuracyPercentage * 100) / 100,
+      accuracyPercentage: (Math.round(accuracyPercentage * 100) / 100).toString(),
     };
   });
 
@@ -176,20 +176,13 @@ export async function processMonthlyLeaderboard() {
     await db.insert(monthlyLeaderboards).values(leaderboardEntries);
   }
 
-  // Assign badges to top 4 users
-  const top4Users = leaderboardEntries.slice(0, 4);
-  const badgeTypes = ['1st_place', '2nd_place', '3rd_place', '4th_place'];
-
-  const badgeEntries = top4Users.map((user, index) => ({
-    userId: user.userId,
-    badgeType: badgeTypes[index],
-    monthYear: previousMonth,
-    rank: user.rank,
-    totalScore: user.totalScore,
-  }));
-
-  if (badgeEntries.length > 0) {
-    await db.insert(userBadges).values(badgeEntries);
+  // Award ranking badges using the badge service
+  try {
+    const { awardRankingBadges } = await import('./badge-service');
+    await awardRankingBadges(previousMonth);
+  } catch (error) {
+    console.error(`Error awarding ranking badges for ${previousMonth}:`, error);
+    // Non-critical error, continue with leaderboard processing
   }
 
   // Save monthly scores for all users
@@ -248,8 +241,6 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
   // Import predictions table to avoid circular dependency
   const { predictions } = await import('../shared/schema');
   
-
-  
   // Get all resolved predictions for the current month
   const currentMonthPredictions = await db
     .select({
@@ -267,6 +258,12 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
     );
   
   console.log(`Found ${currentMonthPredictions.length} resolved predictions for current month`);
+  
+  // If no predictions found, fall back to showing all user profiles
+  if (currentMonthPredictions.length === 0) {
+    console.log('No current month predictions found, falling back to all user profiles');
+    return await getAllUserProfilesLeaderboard();
+  }
   
   // Aggregate predictions by user
   const userStats = new Map<string, {
@@ -307,8 +304,6 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
     .sort((a, b) => b.totalScore - a.totalScore)
     .slice(0, 30); // Top 30
   
-
-  
   // Get user data for usernames
   const userIds = leaderboardData.map(entry => entry.userId);
   const usersData = await db.query.users.findMany({
@@ -327,6 +322,42 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
     correctPredictions: entry.correctPredictions,
     accuracyPercentage: Math.round(entry.accuracyPercentage * 100) / 100,
     badges: [], // No badges for current month
+  }));
+}
+
+// Fallback function to show all users with their current profiles
+async function getAllUserProfilesLeaderboard(): Promise<LeaderboardEntry[]> {
+  console.log('Getting all user profiles for fallback leaderboard');
+  
+  // Get all user profiles with user data
+  const profilesWithUsers = await db
+    .select({
+      userId: userProfiles.userId,
+      monthlyScore: userProfiles.monthlyScore,
+      totalPredictions: userProfiles.totalPredictions,
+      correctPredictions: userProfiles.correctPredictions,
+      username: users.username,
+      role: users.role,
+    })
+    .from(userProfiles)
+    .innerJoin(users, eq(userProfiles.userId, users.id))
+    .orderBy(desc(userProfiles.monthlyScore));
+  
+  console.log(`Found ${profilesWithUsers.length} user profiles`);
+  
+  // Convert to leaderboard format
+  return profilesWithUsers.map((profile, index) => ({
+    rank: index + 1,
+    userId: profile.userId,
+    username: profile.username || 'Unknown',
+    totalScore: profile.monthlyScore || 0,
+    totalPredictions: profile.totalPredictions || 0,
+    correctPredictions: profile.correctPredictions || 0,
+    accuracyPercentage: profile.totalPredictions > 0 
+      ? (profile.correctPredictions / profile.totalPredictions) * 100 
+      : 0,
+    badges: [], // No badges for current month
+    isAdmin: profile.role === 'admin',
   }));
 }
 

@@ -1,14 +1,8 @@
 import { db } from './db';
 import { slotConfigs } from '../shared/schema';
 import { eq, and, gte, lte, asc } from 'drizzle-orm';
-import { 
-  getCurrentActiveSlot, 
-  getSlotForDate, 
-  getPointsForSlot, 
-  isSlotValid, 
-  getValidSlotsForDuration,
-  type DurationKey 
-} from './lib/slots';
+import { DateTime } from 'luxon';
+export type DurationKey = '1h' | '3h' | '6h' | '24h' | '48h' | '1w' | '1m' | '3m' | '6m' | '1y';
 
 export interface SlotInfo {
   slotNumber: number;
@@ -177,12 +171,146 @@ export async function initializeSlotConfigs() {
   await db.insert(slotConfigs).values(allSlots);
 }
 
-// Get current CEST time
+// Lock state configuration - prevent predictions X minutes before slot start
+export const LOCK_BEFORE_START_MINUTES = 5; // Lock 5 minutes before slot starts
+
+// Get current CEST time using proper timezone library
 export function getCurrentCESTTime(): Date {
-  const now = new Date();
-  const cestOffset = 2; // CEST is UTC+2
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  return new Date(utc + (cestOffset * 3600000));
+  return DateTime.now().setZone('Europe/Berlin').toJSDate();
+}
+
+// Get slot for a specific date
+export function getSlotForDate(date: Date | string, duration: DurationKey): SlotInfo {
+  const targetDate = typeof date === 'string' ? new Date(date) : date;
+  const now = DateTime.fromJSDate(targetDate).setZone('Europe/Berlin');
+  
+  // Get the start of the logical period based on duration
+  let periodStart: DateTime;
+  switch (duration) {
+    case '1h':
+    case '3h':
+    case '6h':
+    case '24h':
+    case '48h':
+      periodStart = now.startOf('day');
+      break;
+    case '1w':
+      periodStart = now.startOf('week');
+      break;
+    case '1m':
+      periodStart = now.startOf('month');
+      break;
+    case '3m':
+    case '6m':
+      const quarter = Math.floor((now.month - 1) / 3);
+      periodStart = now.set({ month: quarter * 3 + 1, day: 1 }).startOf('day');
+      break;
+    case '1y':
+      periodStart = now.startOf('year');
+      break;
+    default:
+      periodStart = now.startOf('day');
+  }
+  
+  // Calculate slot number based on duration
+  const config = SLOT_CONFIGURATIONS[duration as keyof typeof SLOT_CONFIGURATIONS];
+  if (!config) {
+    return {
+      slotNumber: 1,
+      startTime: '00:00',
+      endTime: '23:59',
+      pointsIfCorrect: 0,
+      penaltyIfWrong: 0,
+      isActive: false
+    };
+  }
+  
+  const minutesSinceStart = now.diff(periodStart, 'minutes').minutes;
+  const slotIndex = Math.floor(minutesSinceStart / config.intervalDuration);
+  const slotNumber = Math.min(Math.max(slotIndex + 1, 1), config.intervals);
+  
+  // Calculate slot times
+  const slotStartMinutes = (slotNumber - 1) * config.intervalDuration;
+  const slotEndMinutes = slotNumber * config.intervalDuration - 1;
+  
+  const slotStart = periodStart.plus({ minutes: slotStartMinutes });
+  const slotEnd = periodStart.plus({ minutes: slotEndMinutes });
+  
+  return {
+    slotNumber,
+    startTime: slotStart.toFormat('HH:mm'),
+    endTime: slotEnd.toFormat('HH:mm'),
+    pointsIfCorrect: config.points[slotNumber - 1] || 0,
+    penaltyIfWrong: Math.max(1, Math.floor((config.points[slotNumber - 1] || 0) / 2)),
+    isActive: false // Will be set by caller
+  };
+}
+
+// Get current active slot for a duration
+export function getCurrentActiveSlot(duration: DurationKey): SlotInfo {
+  return getSlotForDate(new Date(), duration);
+}
+
+// Check if a date is within an active slot
+export function isWithinActiveSlot(date: Date | string, duration: DurationKey): boolean {
+  const targetDate = typeof date === 'string' ? new Date(date) : date;
+  const slot = getSlotForDate(targetDate, duration);
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const slotStart = DateTime.fromFormat(slot.startTime, 'HH:mm').setZone('Europe/Berlin');
+  const slotEnd = DateTime.fromFormat(slot.endTime, 'HH:mm').setZone('Europe/Berlin');
+  
+  return now >= slotStart && now <= slotEnd;
+}
+
+// Get points for a specific slot in a duration
+export function getPointsForSlot(duration: DurationKey, slotNumber: number): number {
+  const config = SLOT_CONFIGURATIONS[duration as keyof typeof SLOT_CONFIGURATIONS];
+  if (!config || slotNumber < 1 || slotNumber > config.points.length) {
+    return 0;
+  }
+  return config.points[slotNumber - 1];
+}
+
+// Check if a slot is valid (current or future only)
+export function isSlotValid(duration: DurationKey, slotNumber: number): boolean {
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const currentSlot = getSlotForDate(now.toJSDate(), duration);
+  
+  // Only allow current slot or future slots
+  return slotNumber >= currentSlot.slotNumber;
+}
+
+// Get valid slots for duration
+export function getValidSlotsForDuration(duration: DurationKey): SlotInfo[] {
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const currentSlot = getSlotForDate(now.toJSDate(), duration);
+  const config = SLOT_CONFIGURATIONS[duration as keyof typeof SLOT_CONFIGURATIONS];
+  
+  if (!config) return [];
+  
+  const slots: SlotInfo[] = [];
+  
+  // Start from current slot onwards
+  for (let i = currentSlot.slotNumber - 1; i < config.intervals; i++) {
+    const slotNumber = i + 1;
+    const slotStartMinutes = i * config.intervalDuration;
+    const slotEndMinutes = (i + 1) * config.intervalDuration - 1;
+    
+    const periodStart = now.startOf('day');
+    const slotStart = periodStart.plus({ minutes: slotStartMinutes });
+    const slotEnd = periodStart.plus({ minutes: slotEndMinutes });
+    
+    slots.push({
+      slotNumber,
+      startTime: slotStart.toFormat('HH:mm'),
+      endTime: slotEnd.toFormat('HH:mm'),
+      pointsIfCorrect: config.points[i] || 0,
+      penaltyIfWrong: Math.max(1, Math.floor((config.points[i] || 0) / 2)),
+      isActive: slotNumber === currentSlot.slotNumber
+    });
+  }
+  
+  return slots;
 }
 
 // Parse time string to minutes since midnight
@@ -456,6 +584,11 @@ export interface EnhancedSlotInfo {
   isActive: boolean;
   isValid: boolean; // true if current or future slot
   timeRemaining?: number; // in milliseconds
+  lockStatus: {
+    isLocked: boolean;
+    timeUntilStart: number;
+    timeUntilUnlock: number;
+  };
 }
 
 // Get enhanced active slot with validation and points
@@ -467,17 +600,20 @@ export async function getEnhancedActiveSlot(duration: DurationKey): Promise<Enha
     
     // Calculate time remaining
     const now = new Date();
-    const timeRemaining = Math.max(0, activeSlot.slotEnd.toJSDate().getTime() - now.getTime());
+    const slotEndTime = DateTime.fromFormat(activeSlot.endTime, 'HH:mm').setZone('Europe/Berlin');
+    const timeRemaining = Math.max(0, slotEndTime.toJSDate().getTime() - now.getTime());
     
+    const lockStatus = getSlotLockStatus(duration, activeSlot.slotNumber);
     return {
       slotNumber: activeSlot.slotNumber,
-      startTime: activeSlot.slotStart.toFormat('HH:mm'),
-      endTime: activeSlot.slotEnd.plus({ milliseconds: 1 }).toFormat('HH:mm'),
+      startTime: activeSlot.startTime,
+      endTime: activeSlot.endTime,
       pointsIfCorrect: points,
       penaltyIfWrong: penalty,
       isActive: timeRemaining > 0,
       isValid: true, // Current slot is always valid
       timeRemaining,
+      lockStatus,
     };
   } catch (error) {
     console.error('Error getting enhanced active slot:', error);
@@ -499,18 +635,21 @@ export async function getEnhancedValidSlots(duration: DurationKey): Promise<Enha
       let timeRemaining: number | undefined;
       if (isCurrentSlot) {
         const now = new Date();
-        timeRemaining = Math.max(0, slot.slotEnd.toJSDate().getTime() - now.getTime());
+        const slotEndTime = DateTime.fromFormat(slot.endTime, 'HH:mm').setZone('Europe/Berlin');
+        timeRemaining = Math.max(0, slotEndTime.toJSDate().getTime() - now.getTime());
       }
       
+      const lockStatus = getSlotLockStatus(duration, slot.slotNumber);
       return {
         slotNumber: slot.slotNumber,
-        startTime: slot.slotStart.toFormat('HH:mm'),
-        endTime: slot.slotEnd.plus({ milliseconds: 1 }).toFormat('HH:mm'),
+        startTime: slot.startTime,
+        endTime: slot.endTime,
         pointsIfCorrect: points,
         penaltyIfWrong: penalty,
         isActive: isCurrentSlot && (timeRemaining ?? 0) > 0,
         isValid: true, // All returned slots are valid
         timeRemaining,
+        lockStatus,
       };
     });
   } catch (error) {
@@ -523,6 +662,11 @@ export async function getEnhancedValidSlots(duration: DurationKey): Promise<Enha
 export function validateSlotSelection(duration: DurationKey, slotNumber: number): {
   isValid: boolean;
   reason?: string;
+  lockStatus?: {
+    isLocked: boolean;
+    timeUntilStart: number;
+    timeUntilUnlock: number;
+  };
 } {
   try {
     // Check if slot number is within range
@@ -536,8 +680,46 @@ export function validateSlotSelection(duration: DurationKey, slotNumber: number)
       return { isValid: false, reason: 'Cannot select past slots. Only current and future slots are allowed.' };
     }
     
-    return { isValid: true };
+    // Check lock state
+    const lockStatus = getSlotLockStatus(duration, slotNumber);
+    if (lockStatus.isLocked) {
+      return { 
+        isValid: false, 
+        reason: `Slot is locked. Predictions are disabled ${LOCK_BEFORE_START_MINUTES} minutes before slot start.`,
+        lockStatus
+      };
+    }
+    
+    return { isValid: true, lockStatus };
   } catch (error) {
     return { isValid: false, reason: error instanceof Error ? error.message : 'Unknown validation error' };
   }
+} 
+
+// Check if slot is locked (within X minutes of start)
+export function isSlotLocked(duration: string, slotNumber: number): boolean {
+  const now = getCurrentCESTTime();
+  const slotTimes = getSlotTimes(duration, slotNumber);
+  const timeUntilStart = slotTimes.start.getTime() - now.getTime();
+  
+  // Lock if within X minutes of start
+  return timeUntilStart <= (LOCK_BEFORE_START_MINUTES * 60 * 1000);
+}
+
+// Get lock status for a slot
+export function getSlotLockStatus(duration: string, slotNumber: number): {
+  isLocked: boolean;
+  timeUntilStart: number;
+  timeUntilUnlock: number;
+} {
+  const now = getCurrentCESTTime();
+  const slotTimes = getSlotTimes(duration, slotNumber);
+  const timeUntilStart = slotTimes.start.getTime() - now.getTime();
+  const timeUntilUnlock = timeUntilStart - (LOCK_BEFORE_START_MINUTES * 60 * 1000);
+  
+  return {
+    isLocked: timeUntilStart <= (LOCK_BEFORE_START_MINUTES * 60 * 1000),
+    timeUntilStart: Math.max(0, timeUntilStart),
+    timeUntilUnlock: Math.max(0, timeUntilUnlock)
+  };
 } 

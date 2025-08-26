@@ -17,6 +17,7 @@ import { Link } from "wouter";
 import { UserProfile, Prediction, UserBadge, MonthlyScore } from "@shared/schema";
 import ProfileEditForm from "@/components/profile-edit-form";
 import PasswordChangeForm from "@/components/password-change-form";
+import EmailChangeForm from "@/components/email-change-form";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 interface PredictionWithAsset extends Prediction {
@@ -31,6 +32,7 @@ export default function ProfilePage() {
   const { user, profile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [showEmailChange, setShowEmailChange] = useState(false);
   const [showFollowing, setShowFollowing] = useState(false);
   const [showFollowers, setShowFollowers] = useState(false);
   
@@ -283,6 +285,15 @@ export default function ProfilePage() {
                         <Mail className="h-4 w-4 mr-2" />
                         {user.email}
                       </div>
+                      <div className="flex items-center text-sm text-muted-foreground">
+                        <Edit className="h-4 w-4 mr-2" />
+                        <button 
+                          onClick={() => setShowEmailChange(true)}
+                          className="text-primary hover:underline cursor-pointer"
+                        >
+                          Change Email
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -521,6 +532,19 @@ export default function ProfilePage() {
                 </div>
               )}
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Email Change Dialog */}
+        <Dialog open={showEmailChange} onOpenChange={setShowEmailChange}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Change Email Address</DialogTitle>
+              <DialogDescription>
+                Change your email address. You will need to verify the new email before you can make predictions.
+              </DialogDescription>
+            </DialogHeader>
+            <EmailChangeForm />
           </DialogContent>
         </Dialog>
       </main>

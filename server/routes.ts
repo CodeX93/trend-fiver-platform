@@ -2,7 +2,9 @@ import express from 'express';
 import { z } from 'zod';
 import { db } from './db';
 import { users, emailVerifications, predictions, assets, userProfiles, slotConfigs } from '../shared/schema';
-import { eq, and, sql, gte, lte } from 'drizzle-orm';
+import { eq, and, sql, gte, lte, inArray, desc } from 'drizzle-orm';
+import jwt from 'jsonwebtoken';
+import WebSocketService from './websocket-service';
 
 // Extend Express Request type to include user
 declare global {
@@ -24,6 +26,24 @@ const requireUser = (req: express.Request) => {
   }
   return req.user;
 };
+
+// Helper function to get user with full profile including email verification status
+const requireUserWithProfile = async (req: express.Request) => {
+  if (!req.user) {
+    throw new Error('User not found in request');
+  }
+  
+  // Get full user profile from database
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, req.user.userId),
+  });
+  
+  if (!user) {
+    throw new Error('User not found in database');
+  }
+  
+  return user;
+};
 import { 
   registerUser, 
   loginUser, 
@@ -44,23 +64,22 @@ import {
   getUserPredictionStats,
   getUserPredictions,
 } from './prediction-service';
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { getUserByEmail } from './user-service';
 
 // Initialize Firebase Admin if not already initialized
 if (!getApps().length) {
-  // In production, use service account key from environment variable
-  // For development, you can use a service account JSON file
   try {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+    // For development - use default credentials with project ID
+    if (process.env.FIREBASE_PROJECT_ID) {
+      console.log(`🔥 Initializing Firebase Admin with project: ${process.env.FIREBASE_PROJECT_ID}`);
       initializeApp({
-        credential: cert(serviceAccount),
+        projectId: process.env.FIREBASE_PROJECT_ID,
       });
     } else {
-      // For development - fallback to default credentials
-      console.log('⚠️  Using default Firebase credentials. Set FIREBASE_SERVICE_ACCOUNT_KEY for production.');
+      // Fallback to default credentials
+      console.log('⚠️  Using default Firebase credentials. Set FIREBASE_PROJECT_ID for production.');
       initializeApp();
     }
   } catch (error) {
@@ -87,6 +106,7 @@ import {
 import { 
   getMonthlyLeaderboard, 
   getCurrentMonthLeaderboard,
+  getCurrentMonthCountdown,
   getUserCurrentMonthStats,
   getUserRank,
   getUserMonthlyScores,
@@ -138,6 +158,14 @@ import {
 } from './admin-service';
 
 const router = express.Router();
+
+// WebSocket service instance (will be set by the main server)
+let wsService: WebSocketService | null = null;
+
+// Function to set WebSocket service instance
+export function setWebSocketService(service: WebSocketService) {
+  wsService = service;
+}
 
 // Admin middleware defined later; keep routes that need it after its declaration.
 
@@ -291,9 +319,24 @@ router.get('/health', (req, res) => {
 // Register
 router.post('/auth/register', async (req, res) => {
   try {
+    console.log('Registration request received:', req.body);
+    
+    // Validate input
+    if (!req.body.username || !req.body.email || !req.body.password) {
+      console.log('Missing required fields:', { 
+        username: !!req.body.username, 
+        email: !!req.body.email, 
+        password: !!req.body.password 
+      });
+      return res.status(400).json({ error: 'Username, email, and password are required' });
+    }
+    
+    console.log('Calling registerUser function...');
     const result = await registerUser(req.body);
+    console.log('Registration successful:', result);
     res.json(result);
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(400).json({ error: error instanceof Error ? error.message : 'Registration failed' });
   }
 });
@@ -330,6 +373,59 @@ router.get('/auth/verify-email', async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Email verification failed' });
+  }
+});
+
+// Resend verification email with cooldown
+router.post('/auth/resend-verification', authMiddleware, async (req, res) => {
+  try {
+    const user = await requireUserWithProfile(req);
+    
+    // Check if user is already verified
+    if (user.emailVerified) {
+      return res.status(400).json({ error: 'Email is already verified' });
+    }
+    
+    // Check cooldown (5 minutes)
+    const lastVerification = await db.query.emailVerifications.findFirst({
+      where: eq(emailVerifications.userId, user.id),
+      orderBy: [desc(emailVerifications.createdAt)],
+    });
+    
+    if (lastVerification && lastVerification.createdAt && Date.now() - lastVerification.createdAt.getTime() < 5 * 60 * 1000) {
+      const remainingTime = Math.ceil((5 * 60 * 1000 - (Date.now() - lastVerification.createdAt.getTime())) / 1000 / 60);
+      return res.status(429).json({ 
+        error: `Please wait ${remainingTime} minutes before requesting another verification email`,
+        cooldownRemaining: remainingTime * 60 * 1000
+      });
+    }
+    
+    // Generate new verification token
+    const verificationToken = generateVerificationToken();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    
+    // Delete old verification records
+    await db.delete(emailVerifications)
+      .where(eq(emailVerifications.userId, user.id));
+    
+    // Create new verification record
+    await db.insert(emailVerifications).values({
+      userId: user.id,
+      email: user.email,
+      token: verificationToken,
+      expiresAt,
+    });
+    
+    // Send verification email
+    await sendVerificationEmail(user.email, verificationToken);
+    
+    res.json({ 
+      message: 'Verification email sent successfully',
+      cooldown: 5 * 60 * 1000 // 5 minutes in milliseconds
+    });
+  } catch (error) {
+    console.error('Error resending verification email:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to resend verification email' });
   }
 });
 
@@ -380,7 +476,7 @@ router.post('/auth/google', async (req, res) => {
     }
 
     // Create JWT token
-    const token = require('jsonwebtoken').sign(
+    const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: '7d' }
@@ -539,6 +635,80 @@ router.post('/user/change-password', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Password change error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to change password' });
+  }
+});
+
+// Change email (triggers re-verification)
+router.post('/user/change-email', authMiddleware, async (req, res) => {
+  try {
+    const { newEmail, password } = req.body;
+    
+    if (!newEmail || !password) {
+      return res.status(400).json({ error: 'New email and current password are required' });
+    }
+
+    // Validate email format
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    // Check if new email is already taken
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, newEmail),
+    });
+    
+    if (existingUser && existingUser.id !== requireUser(req).userId) {
+      return res.status(400).json({ error: 'Email is already taken by another user' });
+    }
+
+    // Get user from database
+    const user = await getUserById(requireUser(req).userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Verify current password
+    const isCurrentPasswordValid = await comparePassword(password, user.password);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+
+    // Update email and reset verification status
+    await db.update(users)
+      .set({ 
+        email: newEmail,
+        emailVerified: false,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, user.id));
+
+    // Delete old verification records
+    await db.delete(emailVerifications)
+      .where(eq(emailVerifications.userId, user.id));
+
+    // Generate new verification token
+    const verificationToken = generateVerificationToken();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // Create new verification record
+    await db.insert(emailVerifications).values({
+      userId: user.id,
+      email: newEmail,
+      token: verificationToken,
+      expiresAt,
+    });
+
+    // Send verification email to new address
+    await sendVerificationEmail(newEmail, verificationToken);
+
+    res.json({ 
+      message: 'Email changed successfully. Please check your new email for verification.',
+      emailChanged: true
+    });
+  } catch (error) {
+    console.error('Email change error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to change email' });
   }
 });
 
@@ -862,7 +1032,7 @@ router.get('/sentiment/:assetSymbol', async (req, res) => {
   }
 });
 
-// Sentiment aggregation endpoint
+// Sentiment aggregation endpoint - Enhanced with real-time updates
 router.get('/sentiment/:assetSymbol/:duration', async (req, res) => {
   try {
     const { assetSymbol, duration } = req.params;
@@ -884,25 +1054,6 @@ router.get('/sentiment/:assetSymbol/:duration', async (req, res) => {
       }
     }
 
-    // For testing, allow unauthenticated access with limited data
-    if (!userId) {
-      // Return basic sentiment data without requiring authentication
-      const asset = await db.query.assets.findFirst({
-        where: eq(assets.symbol, assetSymbol),
-      });
-
-      if (!asset) {
-        return res.status(404).json({ error: 'Asset not found' });
-      }
-
-      // Return empty sentiment data for unauthenticated users
-      return res.json({
-        asset: assetSymbol,
-        duration,
-        slots: []
-      });
-    }
-
     // Validate duration
     const validDurations = ['1h', '3h', '6h', '24h', '48h', '1w', '1m', '3m', '6m', '1y'];
     if (!validDurations.includes(duration)) {
@@ -918,12 +1069,14 @@ router.get('/sentiment/:assetSymbol/:duration', async (req, res) => {
       return res.status(404).json({ error: 'Asset not found' });
     }
 
-    // Get sentiment data grouped by slot
+    // Get sentiment data grouped by slot with enhanced aggregation
     const sentimentData = await db
       .select({
         slotNumber: predictions.slotNumber,
         direction: predictions.direction,
         count: sql<number>`count(*)`,
+        slotStart: predictions.slotStart,
+        slotEnd: predictions.slotEnd,
       })
       .from(predictions)
       .where(
@@ -933,39 +1086,101 @@ router.get('/sentiment/:assetSymbol/:duration', async (req, res) => {
           eq(predictions.status, 'active')
         )
       )
-      .groupBy(predictions.slotNumber, predictions.direction);
+      .groupBy(predictions.slotNumber, predictions.direction, predictions.slotStart, predictions.slotEnd);
 
-    // Process the data to group by slot
-    const slotMap = new Map<number, { up: number; down: number; total: number }>();
+    // Process the data to group by slot with enhanced information
+    const slotMap = new Map<number, { 
+      up: number; 
+      down: number; 
+      total: number;
+      slotStart: Date;
+      slotEnd: Date;
+      isActive: boolean;
+      timeRemaining?: number;
+    }>();
+
+    const now = new Date();
 
     for (const row of sentimentData) {
-      const slot = slotMap.get(row.slotNumber) || { up: 0, down: 0, total: 0 };
+      const slot = slotMap.get(row.slotNumber) || { 
+        up: 0, 
+        down: 0, 
+        total: 0,
+        slotStart: row.slotStart,
+        slotEnd: row.slotEnd,
+        isActive: false,
+        timeRemaining: 0
+      };
+      
       if (row.direction === 'up') {
         slot.up = parseInt(row.count.toString());
       } else {
         slot.down = parseInt(row.count.toString());
       }
       slot.total = slot.up + slot.down;
+      
+      // Calculate if slot is active and time remaining
+      if (now >= slot.slotStart && now <= slot.slotEnd) {
+        slot.isActive = true;
+        slot.timeRemaining = Math.max(0, slot.slotEnd.getTime() - now.getTime());
+      }
+      
       slotMap.set(row.slotNumber, slot);
     }
 
-    // Convert to array format
+    // Convert to array format with enhanced slot information
     const slots = Array.from(slotMap.entries()).map(([slotNumber, data]) => ({
       slotNumber,
       slotLabel: `Slot ${slotNumber}`,
       up: data.up,
       down: data.down,
-      total: data.total
+      total: data.total,
+      slotStart: data.slotStart,
+      slotEnd: data.slotEnd,
+      isActive: data.isActive,
+      timeRemaining: data.timeRemaining
     }));
 
     // Sort by slot number
     slots.sort((a, b) => a.slotNumber - b.slotNumber);
 
-    res.json({
+    // Calculate overall sentiment metrics
+    const totalUp = slots.reduce((sum, slot) => sum + slot.up, 0);
+    const totalDown = slots.reduce((sum, slot) => sum + slot.down, 0);
+    const totalPredictions = totalUp + totalDown;
+    
+    const upPercentage = totalPredictions > 0 ? Math.round((totalUp / totalPredictions) * 100) : 0;
+    const downPercentage = totalPredictions > 0 ? Math.round((totalDown / totalPredictions) * 100) : 0;
+
+    // Determine overall sentiment
+    let overallSentiment = 'neutral';
+    if (totalPredictions > 0) {
+      if (upPercentage > 60) overallSentiment = 'bullish';
+      else if (downPercentage > 60) overallSentiment = 'bearish';
+      else overallSentiment = 'neutral';
+    }
+
+    const response = {
       asset: assetSymbol,
       duration,
-      slots
-    });
+      slots,
+      summary: {
+        totalPredictions,
+        totalUp,
+        totalDown,
+        upPercentage,
+        downPercentage,
+        overallSentiment
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(response);
+
+    // Broadcast sentiment update via WebSocket for real-time updates
+    if (wsService) {
+      wsService.broadcastSentimentUpdate(assetSymbol, duration, response);
+    }
 
   } catch (error) {
     console.error('Error fetching sentiment data:', error);
@@ -1117,7 +1332,7 @@ router.post('/assets/:symbol(*)/opinions', authMiddleware, async (req, res) => {
 router.get('/test/exchangerate', async (req, res) => {
   try {
     const { base = 'EUR', quote = 'USD' } = req.query;
-    const apiKey = process.env.EXCHANGERATE_API_KEY || '52c0f32f5f21dad8df22ebdf6d6c8c76';
+    const apiKey = process.env.EXCHANGERATE_API_KEY || '9782fcfa7c065df33f4f2ebacc986e4e';
     
     const apiUrl = apiKey 
       ? `https://api.exchangerate.host/live?access_key=${apiKey}&base=${base}&currencies=${quote}`
@@ -1191,72 +1406,189 @@ router.post('/admin/update-forex', adminMiddleware, async (req, res) => {
 // Get monthly leaderboard
 router.get('/leaderboard', async (req, res) => {
   try {
-    const { month } = req.query;
-    const leaderboard = await getMonthlyLeaderboard(month as string);
-    res.json(leaderboard);
+    const { month, includeAdmins } = req.query;
+    const monthParam = month as string || 'previous';
+    const includeAdminsParam = includeAdmins === 'false' ? false : true;
+    
+    let leaderboardData: any[] = [];
+    
+    if (monthParam === 'current') {
+      leaderboardData = await getCurrentMonthLeaderboard();
+    } else if (monthParam === 'previous') {
+      leaderboardData = await getMonthlyLeaderboard(undefined);
+    } else {
+      // Validate month format (YYYY-MM)
+      if (!/^\d{4}-\d{2}$/.test(monthParam)) {
+        return res.status(400).json({ error: 'Invalid month format. Use YYYY-MM' });
+      }
+      leaderboardData = await getMonthlyLeaderboard(monthParam);
+    }
+    
+    // Apply admin filtering if requested
+    if (!includeAdminsParam && leaderboardData.length > 0) {
+      // Get user roles for admin filtering
+      const userIds = leaderboardData.map(entry => entry.userId);
+      const usersData = await db.query.users.findMany({
+        where: inArray(users.id, userIds),
+      });
+      const userMap = new Map(usersData.map(user => [user.id, user]));
+      
+      leaderboardData = leaderboardData.filter(entry => {
+        const user = userMap.get(entry.userId);
+        return user && user.role !== 'admin';
+      });
+    }
+    
+    // If still no data, fall back to current month leaderboard
+    if (leaderboardData.length === 0) {
+      console.log('No data found for requested month, falling back to current month');
+      leaderboardData = await getCurrentMonthLeaderboard();
+      
+      // Apply admin filtering again if needed
+      if (!includeAdminsParam && leaderboardData.length > 0) {
+        const userIds = leaderboardData.map(entry => entry.userId);
+        const usersData = await db.query.users.findMany({
+          where: inArray(users.id, userIds),
+        });
+        const userMap = new Map(usersData.map(user => [user.id, user]));
+        
+        leaderboardData = leaderboardData.filter(entry => {
+          const user = userMap.get(entry.userId);
+          return user && user.role !== 'admin';
+        });
+      }
+    }
+    
+    res.json({
+      month: monthParam,
+      includeAdmins: includeAdminsParam,
+      data: leaderboardData,
+      total: leaderboardData.length,
+      timestamp: new Date().toISOString(),
+      timezone: 'Europe/Berlin'
+    });
+    
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get leaderboard' });
+    console.error('Error fetching leaderboard:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Get current month leaderboard
+// Get current month leaderboard (live scores)
 router.get('/leaderboard/current', async (req, res) => {
   try {
-    const leaderboard = await getCurrentMonthLeaderboard();
-    res.json(leaderboard);
+    const { includeAdmins } = req.query;
+    const includeAdminsParam = includeAdmins === 'false' ? false : true;
+    
+    const leaderboardData = await getCurrentMonthLeaderboard();
+    
+    // Apply admin filtering if requested
+    let filteredData = leaderboardData;
+    if (!includeAdminsParam) {
+      // Get user roles for admin filtering
+      const userIds = leaderboardData.map(entry => entry.userId);
+      const usersData = await db.query.users.findMany({
+        where: inArray(users.id, userIds),
+      });
+      const userMap = new Map(usersData.map(user => [user.id, user]));
+      
+      filteredData = leaderboardData.filter(entry => {
+        const user = userMap.get(entry.userId);
+        return user && user.role !== 'admin';
+      });
+    }
+    
+    res.json({
+      month: 'current',
+      includeAdmins: includeAdminsParam,
+      data: filteredData,
+      total: filteredData.length,
+      timestamp: new Date().toISOString(),
+      timezone: 'Europe/Berlin'
+    });
+    
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get current leaderboard' });
+    console.error('Error fetching current month leaderboard:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Get user's current month stats
-router.get('/leaderboard/user', authMiddleware, async (req, res) => {
+router.get('/leaderboard/user', async (req, res) => {
   try {
-    const stats = await getUserCurrentMonthStats(requireUser(req).userId);
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get user stats' });
-  }
-});
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
 
-// Get user's monthly scores
-router.get('/leaderboard/user/scores', authMiddleware, async (req, res) => {
-  try {
-    const scores = await getUserMonthlyScores(requireUser(req).userId);
-    res.json(scores);
+    const decoded = extractUserFromToken(token);
+    if (!decoded) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const userStats = await getUserCurrentMonthStats(decoded.userId);
+    if (!userStats) {
+      return res.status(404).json({ error: 'User stats not found' });
+    }
+
+    res.json({
+      ...userStats,
+      timestamp: new Date().toISOString(),
+      timezone: 'Europe/Berlin'
+    });
+    
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get monthly scores' });
+    console.error('Error fetching user stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Get user's badges
-router.get('/leaderboard/user/badges', authMiddleware, async (req, res) => {
+router.get('/users/:userId/badges', async (req, res) => {
   try {
-    const badges = await getUserBadges(requireUser(req).userId);
+    const userId = req.params.userId;
+    
+    const { getUserBadges } = await import('./badge-service');
+    const badges = await getUserBadges(userId);
+    
     res.json(badges);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get badges' });
+    console.error('Error fetching user badges:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Get leaderboard stats
+// Get leaderboard statistics
 router.get('/leaderboard/stats', async (req, res) => {
   try {
     const stats = await getLeaderboardStats();
-    res.json(stats);
+    
+    res.json({
+      ...stats,
+      timestamp: new Date().toISOString(),
+      timezone: 'Europe/Berlin'
+    });
+    
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get leaderboard stats' });
+    console.error('Error fetching leaderboard stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Get current month countdown
 router.get('/leaderboard/countdown', async (req, res) => {
   try {
-    const { getCurrentMonthCountdown } = await import('./leaderboard-service');
     const countdown = getCurrentMonthCountdown();
-    res.json(countdown);
+    
+    res.json({
+      ...countdown,
+      timestamp: new Date().toISOString(),
+      timezone: 'Europe/Berlin'
+    });
+    
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get countdown' });
+    console.error('Error fetching countdown:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1697,6 +2029,28 @@ router.post('/admin/prices/update', adminMiddleware, async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to trigger price update' });
+  }
+});
+
+// Trigger badge backfill for existing users
+router.post('/admin/badges/backfill', adminMiddleware, async (req, res) => {
+  try {
+    const { backfillBadgesForExistingUsers } = await import('./badge-service');
+    const result = await backfillBadgesForExistingUsers();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to trigger badge backfill' });
+  }
+});
+
+// Get badge statistics
+router.get('/admin/badges/stats', adminMiddleware, async (req, res) => {
+  try {
+    const { getBadgeStatistics } = await import('./badge-service');
+    const stats = await getBadgeStatistics();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get badge statistics' });
   }
 });
 

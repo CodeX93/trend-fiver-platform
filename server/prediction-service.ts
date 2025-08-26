@@ -165,6 +165,16 @@ export async function createPrediction(input: CreatePredictionInput) {
     // Non-critical error - prediction was created successfully
   }
 
+  // Broadcast prediction update via WebSocket for real-time sentiment updates
+  try {
+    // Note: WebSocket service needs to be properly initialized in the main server
+    // For now, we'll skip broadcasting to avoid import issues
+    console.log('Prediction created - WebSocket broadcast would happen here');
+  } catch (error) {
+    console.error('Failed to broadcast prediction update:', error);
+    // Non-critical error - prediction was created successfully
+  }
+
   return prediction;
 }
 
@@ -301,152 +311,162 @@ export async function getSentimentData(assetSymbol: string, duration: string): P
 
 // Evaluate expired predictions
 export async function evaluateExpiredPredictions() {
-  const now = new Date();
+  try {
+    console.log('Starting prediction evaluation...');
+    
+    // Get all expired predictions that haven't been evaluated
+    const expiredPredictions = await db.query.predictions.findMany({
+      where: and(
+        eq(predictions.status, 'active'),
+        lt(predictions.timestampExpiration, new Date())
+      ),
+    });
 
-  // Get all expired predictions that haven't been evaluated
-  const expiredPredictions = await db.query.predictions.findMany({
-    where: and(
-      eq(predictions.status, 'active'),
-      lt(predictions.timestampExpiration, now)
-    ),
-  });
+    console.log(`Found ${expiredPredictions.length} expired predictions to evaluate`);
 
-  for (const prediction of expiredPredictions) {
-    try {
-      await evaluatePrediction(prediction.id);
-    } catch (error) {
-      console.error(`Failed to evaluate prediction ${prediction.id}:`, error);
+    for (const prediction of expiredPredictions) {
+      try {
+        await evaluatePrediction(prediction.id);
+      } catch (error) {
+        console.error(`Failed to evaluate prediction ${prediction.id}:`, error);
+      }
     }
+
+    console.log('Prediction evaluation completed');
+  } catch (error) {
+    console.error('Error in prediction evaluation:', error);
   }
 }
 
 // Evaluate a single prediction
 export async function evaluatePrediction(predictionId: string) {
-  const prediction = await db.query.predictions.findFirst({
-    where: eq(predictions.id, predictionId),
-  });
-
-  if (!prediction) {
-    throw new Error('Prediction not found');
-  }
-
-  if (prediction.status !== 'active') {
-    throw new Error('Prediction is not active');
-  }
-
-  // Get asset details
-  const asset = await db.query.assets.findFirst({
-    where: eq(assets.id, prediction.assetId),
-  });
-
-  if (!asset) {
-    throw new Error('Asset not found');
-  }
-
-  // Get live end price for accurate evaluation
-  console.log(`Fetching live price for ${asset.symbol} at prediction evaluation...`);
-  const liveEndPrice = await getLiveAssetPrice(asset.symbol);
-  if (!liveEndPrice) {
-    console.error(`Failed to get live end price for ${asset.symbol}, falling back to cached price`);
-    // Fallback to cached price if live price fails
-    const cachedEndPrice = await getAssetPrice(asset.symbol);
-    if (!cachedEndPrice) {
-      throw new Error('Unable to get end price for evaluation');
-    }
-  }
-
-  const endPrice = liveEndPrice || await getAssetPrice(asset.symbol);
-  if (!endPrice) {
-    throw new Error('Unable to get end price for evaluation');
-  }
-
-  console.log(`Prediction evaluation - ${asset.symbol} price_end: ${endPrice}`);
-
-  // Determine if prediction was correct
-  const startPrice = prediction.priceStart;
-  if (!startPrice) {
-    throw new Error('Start price not available for evaluation');
-  }
-
-  const startPriceNum = parseFloat(startPrice.toString());
-  let isCorrect = false;
-  if (prediction.direction === 'up') {
-    isCorrect = endPrice > startPriceNum;
-  } else {
-    isCorrect = endPrice < startPriceNum;
-  }
-
-  // Calculate points using new slot system with accuracy bonus
-  let pointsAwarded: number;
   try {
-    const basePoints = getPointsForSlot(prediction.duration as any, prediction.slotNumber);
-    if (isCorrect) {
-      pointsAwarded = basePoints;
-      
-      // Add accuracy bonus based on how close the prediction was
-      const priceChangePercent = Math.abs((endPrice - startPriceNum) / startPriceNum * 100);
-      
-      if (priceChangePercent <= 0.1) {
-        // Exact match bonus (+10 points for closing price within 0.1%)
-        pointsAwarded += 10;
-        console.log(`Accuracy bonus: +10 points for exact match (${priceChangePercent.toFixed(3)}% change)`);
-      } else if (priceChangePercent <= 0.5) {
-        // High accuracy bonus (+5 points for within 0.5%)
-        pointsAwarded += 5;
-        console.log(`Accuracy bonus: +5 points for high accuracy (${priceChangePercent.toFixed(3)}% change)`);
-      } else if (priceChangePercent <= 1.0) {
-        // Acceptable range bonus (+2 points for within 1%)
-        pointsAwarded += 2;
-        console.log(`Accuracy bonus: +2 points for acceptable range (${priceChangePercent.toFixed(3)}% change)`);
-      }
-    } else {
-      // Penalty is 50% of the slot points (minimum 1)
-      pointsAwarded = -Math.max(1, Math.floor(basePoints / 2));
+    // Get the prediction
+    const prediction = await db.query.predictions.findFirst({
+      where: eq(predictions.id, predictionId),
+    });
+
+    if (!prediction) {
+      throw new Error('Prediction not found');
     }
-  } catch (error) {
-    console.error('Error calculating points:', error);
-    throw new Error('Failed to calculate prediction points');
-  }
 
-  // Update prediction
-  await db.update(predictions)
-    .set({
-      status: 'evaluated',
-      result: isCorrect ? 'correct' : 'incorrect',
-      pointsAwarded,
-      priceEnd: endPrice.toString(),
-      evaluatedAt: new Date(),
-    })
-    .where(eq(predictions.id, predictionId));
+    // Get the asset
+    const asset = await db.query.assets.findFirst({
+      where: eq(assets.id, prediction.assetId),
+    });
 
-  // Update user profile
-  const profile = await db.query.userProfiles.findFirst({
-    where: eq(userProfiles.userId, prediction.userId),
-  });
+    if (!asset) {
+      throw new Error('Asset not found');
+    }
 
-  if (profile) {
-    const newCorrectPredictions = profile.correctPredictions + (isCorrect ? 1 : 0);
-    const newTotalPredictions = profile.totalPredictions + 1;
-    const newMonthlyScore = profile.monthlyScore + pointsAwarded;
-    const newTotalScore = profile.totalScore + pointsAwarded;
+    // Get current asset price
+    const currentPrice = await getLiveAssetPrice(asset.symbol) || await getAssetPrice(asset.symbol);
+    
+    if (!currentPrice) {
+      throw new Error('No current price available');
+    }
 
-    await db.update(userProfiles)
+    // Get the prediction's start and end prices
+    const priceStart = parseFloat(prediction.priceStart || '0');
+    const priceEnd = parseFloat(currentPrice.toString());
+
+    if (!priceStart || !priceEnd) {
+      throw new Error('Missing price data');
+    }
+
+    // Determine if prediction was correct
+    let result: 'correct' | 'incorrect' = 'incorrect';
+    let pointsAwarded = 0;
+
+    if (prediction.direction === 'up' && priceEnd > priceStart) {
+      result = 'correct';
+    } else if (prediction.direction === 'down' && priceEnd < priceStart) {
+      result = 'correct';
+    }
+
+    // Calculate points based on slot timing and result
+    if (result === 'correct') {
+      // Import slot service to get points calculation
+      const { getPointsForSlot } = await import('./slot-service');
+      pointsAwarded = getPointsForSlot(prediction.duration as any, prediction.slotNumber);
+    } else {
+      // Penalty for incorrect prediction (50% of slot points, minimum -1)
+      const { getPointsForSlot } = await import('./slot-service');
+      const slotPoints = getPointsForSlot(prediction.duration as any, prediction.slotNumber);
+      pointsAwarded = Math.max(-1, Math.floor(-slotPoints / 2));
+    }
+
+    // Update prediction with result
+    await db.update(predictions)
       .set({
-        correctPredictions: newCorrectPredictions,
-        totalPredictions: newTotalPredictions,
-        monthlyScore: newMonthlyScore,
-        totalScore: newTotalScore,
+        status: 'evaluated',
+        result,
+        pointsAwarded,
+        priceEnd: priceEnd.toString(),
+        evaluatedAt: new Date(),
       })
-      .where(eq(userProfiles.userId, prediction.userId));
-  }
+      .where(eq(predictions.id, prediction.id));
 
-  return {
-    predictionId,
-    isCorrect,
-    pointsAwarded,
-    startPrice,
-    endPrice,
-  };
+    // Update user profile with new score
+    const userProfile = await db.query.userProfiles.findFirst({
+      where: eq(userProfiles.userId, prediction.userId),
+    });
+
+    if (userProfile) {
+      const newMonthlyScore = (userProfile.monthlyScore || 0) + pointsAwarded;
+      const newTotalPredictions = (userProfile.totalPredictions || 0) + 1;
+      const newCorrectPredictions = (userProfile.correctPredictions || 0) + (result === 'correct' ? 1 : 0);
+
+      await db.update(userProfiles)
+        .set({
+          monthlyScore: newMonthlyScore,
+          totalPredictions: newTotalPredictions,
+          correctPredictions: newCorrectPredictions,
+          updatedAt: new Date(),
+        })
+        .where(eq(userProfiles.userId, prediction.userId));
+
+      console.log(`Updated user ${prediction.userId} profile: score=${newMonthlyScore}, predictions=${newTotalPredictions}, correct=${newCorrectPredictions}`);
+    }
+
+    // Check and award badges after updating user profile
+    try {
+      const { checkAndAwardBadges } = await import('./badge-service');
+      const newBadges = await checkAndAwardBadges(prediction.userId);
+      
+      if (newBadges.length > 0) {
+        console.log(`User ${prediction.userId} earned ${newBadges.length} new badges:`, newBadges.map(b => b.badgeName));
+        
+        // TODO: Broadcast badge notification via WebSocket
+        // if (wsService) {
+        //   wsService.broadcastToUser(prediction.userId, 'badge-earned', {
+        //     badges: newBadges,
+        //     message: `Congratulations! You earned ${newBadges.length} new badge${newBadges.length > 1 ? 's' : ''}!`
+        //   });
+        // }
+      }
+    } catch (error) {
+      console.error(`Error checking badges for user ${prediction.userId}:`, error);
+      // Don't fail the prediction evaluation if badge checking fails
+    }
+
+    // Broadcast leaderboard update via WebSocket
+    try {
+      // Note: WebSocket service needs to be properly initialized in the main server
+      // For now, we'll skip broadcasting to avoid import issues
+      console.log(`Leaderboard update for user ${prediction.userId} - WebSocket broadcast would happen here`);
+    } catch (error) {
+      console.error('Failed to broadcast leaderboard update:', error);
+      // Non-critical error
+    }
+
+    console.log(`Prediction ${prediction.id} evaluated: ${result}, points: ${pointsAwarded}`);
+    return { result, pointsAwarded };
+
+  } catch (error) {
+    console.error(`Error evaluating prediction ${predictionId}:`, error);
+    throw error;
+  }
 }
 
 // Get prediction statistics for a user

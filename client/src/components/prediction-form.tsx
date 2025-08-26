@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, TrendingUp, TrendingDown, Clock, AlertTriangle, CheckCircle, Star } from "lucide-react";
+import { Loader2, TrendingUp, TrendingDown, Clock, AlertTriangle, CheckCircle, Star, Lock } from "lucide-react";
 
 interface PredictionFormProps {
   assetId: string;
@@ -38,6 +38,11 @@ interface SlotInfo {
   isActive: boolean;
   isValid: boolean; // true if current or future slot
   timeRemaining?: number; // in milliseconds (matching backend)
+  lockStatus?: {
+    isLocked: boolean;
+    timeUntilStart: number;
+    timeUntilUnlock: number;
+  };
 }
 
 interface SlotUpdate {
@@ -178,6 +183,18 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
       return;
     }
 
+    // Check if slot is locked
+    if (activeSlot.lockStatus?.isLocked) {
+      toast({
+        title: "Slot locked",
+        description: `Predictions are disabled ${activeSlot.lockStatus.timeUntilStart > 0 ? 
+          `until slot starts in ${Math.ceil(activeSlot.lockStatus.timeUntilStart / 60000)} minutes` : 
+          'for this slot'}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     mutation.mutate(data);
   };
 
@@ -293,6 +310,12 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
                     <span className="text-sm text-muted-foreground">
                       {activeSlot.startTime} - {activeSlot.endTime}
                     </span>
+                    {activeSlot.lockStatus?.isLocked && (
+                      <Badge variant="destructive" className="ml-2">
+                        <Lock className="h-3 w-3 mr-1" />
+                        Locked
+                      </Badge>
+                    )}
                   </div>
                   {activeSlot.isActive && (
                     <div className="flex items-center gap-1 text-sm">
@@ -309,6 +332,12 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
                 {activeSlot.isValid === false ? (
                   <div className="text-sm text-red-600">
                     <span className="font-medium">Slot expired:</span> Predictions are only allowed for current and future slots.
+                  </div>
+                ) : activeSlot.lockStatus?.isLocked ? (
+                  <div className="text-sm text-orange-600">
+                    <span className="font-medium">Slot locked:</span> Predictions are disabled {activeSlot.lockStatus.timeUntilStart > 0 ? 
+                      `until slot starts in ${Math.ceil(activeSlot.lockStatus.timeUntilStart / 60000)} minutes` : 
+                      'for this slot'}. Please wait for the slot to unlock.
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -385,7 +414,7 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
 
             <Button
               type="submit"
-              disabled={mutation.isPending || !activeSlot?.isActive || activeSlot?.isValid === false}
+              disabled={mutation.isPending || !activeSlot?.isActive || activeSlot?.isValid === false || activeSlot?.lockStatus?.isLocked}
               className="w-full"
               size="lg"
             >
@@ -393,6 +422,11 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Submitting...
+                </>
+              ) : activeSlot?.lockStatus?.isLocked ? (
+                <>
+                  <Lock className="mr-2 h-4 w-4" />
+                  Slot Locked
                 </>
               ) : (
                 <>
@@ -426,21 +460,30 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
                 const isValidSlot = slot.isValid !== false; // Handle undefined as valid for backward compatibility
                 const isCurrentSlot = slot.isActive;
                 
+                const isLocked = slot.lockStatus?.isLocked;
+                
                 return (
                   <div
                     key={slot.slotNumber || Math.random()}
                     className={`p-3 rounded-lg border text-xs transition-colors ${
                       !isValidSlot 
                         ? "border-red-200 bg-red-50 opacity-50 cursor-not-allowed" 
-                        : isCurrentSlot 
-                          ? "border-green-200 bg-green-50 shadow-sm ring-2 ring-green-100" 
-                          : "border-blue-200 bg-blue-50 hover:border-blue-300"
+                        : isLocked
+                          ? "border-orange-200 bg-orange-50 opacity-75 cursor-not-allowed"
+                          : isCurrentSlot 
+                            ? "border-green-200 bg-green-50 shadow-sm ring-2 ring-green-100" 
+                            : "border-blue-200 bg-blue-50 hover:border-blue-300"
                     }`}
-                    title={!isValidSlot ? "Past slot - predictions not allowed" : undefined}
+                    title={
+                      !isValidSlot ? "Past slot - predictions not allowed" :
+                      isLocked ? "Slot locked - predictions disabled" :
+                      undefined
+                    }
                   >
                     <div className="font-semibold text-center mb-1 flex items-center justify-center gap-1">
                       Slot {slot.slotNumber || 'N/A'}
                       {isCurrentSlot && <span className="text-green-600">•</span>}
+                      {isLocked && <span className="text-orange-600">🔒</span>}
                       {!isValidSlot && <span className="text-red-600">✕</span>}
                     </div>
                     <div className={`text-center mb-2 ${!isValidSlot ? "text-gray-400" : "text-gray-600"}`}>

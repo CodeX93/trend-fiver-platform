@@ -76,44 +76,66 @@ export function generateVerificationToken(): string {
 // Register new user
 export async function registerUser(input: RegisterInput) {
   const { username, email, password } = input;
+  
+  console.log('Starting registration for:', { username, email });
 
   // Check if user already exists
+  console.log('Checking for existing user...');
   const existingUser = await db.query.users.findFirst({
     where: or(eq(users.email, email), eq(users.username, username)),
   });
 
   if (existingUser) {
+    console.log('User already exists:', existingUser.email);
     throw new Error('User with this email or username already exists');
   }
+  
+  console.log('No existing user found, proceeding with registration...');
 
   // Hash password
+  console.log('Hashing password...');
   const hashedPassword = await hashPassword(password);
+  console.log('Password hashed successfully');
 
   // Create user
+  console.log('Creating user in database...');
   const [user] = await db.insert(users).values({
     username,
     email,
     password: hashedPassword,
   }).returning();
+  console.log('User created successfully:', user.id);
 
   // Create user profile
+  console.log('Creating user profile...');
   await db.insert(userProfiles).values({
     userId: user.id,
   });
+  console.log('User profile created successfully');
 
   // Generate verification token
+  console.log('Generating verification token...');
   const verificationToken = generateVerificationToken();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+  console.log('Verification token generated:', verificationToken);
 
+  console.log('Creating email verification record...');
   await db.insert(emailVerifications).values({
     userId: user.id,
     email: user.email,
     token: verificationToken,
     expiresAt,
   });
+  console.log('Email verification record created successfully');
 
-  // Send verification email
-  await sendVerificationEmail(user.email, verificationToken);
+  // Send verification email (don't fail registration if email fails)
+  try {
+    await sendVerificationEmail(user.email, verificationToken);
+    console.log(`Verification email sent to ${user.email}`);
+  } catch (emailError) {
+    console.error('Failed to send verification email:', emailError);
+    // Don't fail the registration, just log the error
+  }
 
   return {
     user: {

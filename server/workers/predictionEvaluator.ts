@@ -77,13 +77,59 @@ function calculatePoints(correct: boolean, baseScore: number, priceStart?: numbe
 }
 
 /**
+ * Ensure exact boundary price capture for slot start/end
+ * This function tries to get the most accurate price at the exact boundary
+ */
+async function ensureBoundaryPriceCapture(
+  assetId: string,
+  assetSymbol: string,
+  boundaryTime: Date,
+  isStart: boolean
+): Promise<number | null> {
+  try {
+    // For start boundary, try to get price slightly before
+    // For end boundary, try to get price slightly after
+    const offsetMs = isStart ? -60000 : 60000; // 1 minute offset
+    const targetTime = new Date(boundaryTime.getTime() + offsetMs);
+    
+    // First try exact boundary time
+    let price = await fetchPriceAtTimestamp(assetId, assetSymbol, boundaryTime, 1);
+    if (price) return price;
+    
+    // Then try with offset
+    price = await fetchPriceAtTimestamp(assetId, assetSymbol, targetTime, 2);
+    if (price) return price;
+    
+    // Finally, try current live price as fallback
+    const { getLiveAssetPrice } = await import('../price-service.js');
+    const livePrice = await getLiveAssetPrice(assetSymbol);
+    if (livePrice) {
+      // Store the price for future reference
+      const { assetPrices } = await import('../../shared/schema.js');
+      await db.insert(assetPrices).values({
+        assetId,
+        price: livePrice.toString(),
+        timestamp: new Date(),
+        source: 'live-fallback'
+      });
+      return livePrice;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`Error ensuring boundary price capture for ${assetSymbol}:`, error);
+    return null;
+  }
+}
+
+/**
  * Fetch price at a specific timestamp with fallback logic
  */
 async function fetchPriceAtTimestamp(
   assetId: string,
   assetSymbol: string,
   timestamp: Date,
-  toleranceMinutes: number = 30
+  toleranceMinutes: number = 5 // Reduced tolerance for more accurate boundary capture
 ): Promise<number | null> {
   try {
     // First, try to find exact price snapshot
@@ -184,10 +230,10 @@ async function evaluatePrediction(prediction: any): Promise<void> {
 
     const assetSymbol = asset[0].symbol;
 
-    // Fetch priceStart if not already set
+    // Fetch priceStart if not already set - use exact boundary capture
     let priceStart = prediction.priceStart;
     if (!priceStart) {
-      priceStart = await fetchPriceAtTimestamp(assetId, assetSymbol, slotStart);
+      priceStart = await ensureBoundaryPriceCapture(assetId, assetSymbol, slotStart, true);
       if (!priceStart) {
         console.log(`No priceStart available for prediction ${id}, requeuing...`);
         // Requeue with delay
@@ -200,8 +246,8 @@ async function evaluatePrediction(prediction: any): Promise<void> {
       }
     }
 
-    // Fetch priceEnd
-    const priceEnd = await fetchPriceAtTimestamp(assetId, assetSymbol, slotEnd);
+    // Fetch priceEnd - use exact boundary capture
+    const priceEnd = await ensureBoundaryPriceCapture(assetId, assetSymbol, slotEnd, false);
     if (!priceEnd) {
       console.log(`No priceEnd available for prediction ${id}, requeuing...`);
       // Requeue with delay

@@ -8,11 +8,12 @@ import SentimentChart from "@/components/sentiment-chart";
 import { Asset } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Users, TrendingUp, ArrowLeft, Share2, Clock, Star, CalendarClock, Coins, LineChart, DollarSign } from "lucide-react";
+import { BarChart3, Users, TrendingUp, ArrowLeft, Share2, Clock, Star, CalendarClock, Coins, LineChart, DollarSign, TrendingDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function AssetDetailPage() {
   const [, params] = useRoute("/assets/:symbol");
@@ -22,6 +23,18 @@ export default function AssetDetailPage() {
 
   const { data: asset, isLoading: isLoadingAsset } = useQuery<Asset>({
     queryKey: [`/api/assets/${symbol}`],
+  });
+
+  // Fetch real-time price for this asset
+  const { data: priceData, isLoading: isLoadingPrice } = useQuery<{ symbol: string; price: number }>({
+    queryKey: [`/api/assets/${symbol}/price`],
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // Fetch price history for sparkline
+  const { data: priceHistory } = useQuery<Array<{ price: number; timestamp: string; source: string }>>({
+    queryKey: [`/api/assets/${symbol}/history`, 30], // Last 30 days
+    refetchInterval: 300000, // Refresh every 5 minutes
   });
 
   const getAssetIcon = (type: string) => {
@@ -50,6 +63,55 @@ export default function AssetDetailPage() {
     }
   };
 
+  const getPriceChangeIndicator = () => {
+    if (!priceHistory || priceHistory.length < 2) return <Minus className="h-6 w-6 text-gray-400" />;
+    
+    const currentPrice = priceHistory[0]?.price;
+    const previousPrice = priceHistory[priceHistory.length - 1]?.price;
+    
+    if (!currentPrice || !previousPrice) return <Minus className="h-6 w-6 text-gray-400" />;
+    
+    const change = currentPrice - previousPrice;
+    if (change > 0) return <TrendingUp className="h-6 w-6 text-green-500" />;
+    if (change < 0) return <TrendingDown className="h-6 w-6 text-red-500" />;
+    return <Minus className="h-6 w-6 text-gray-400" />;
+  };
+
+  const formatPrice = (price: number) => {
+    if (asset?.type === 'forex') {
+      return price.toFixed(4);
+    } else if (asset?.type === 'crypto') {
+      return price < 1 ? price.toFixed(6) : price.toFixed(2);
+    } else {
+      return price.toFixed(2);
+    }
+  };
+
+  const getPriceChangePercentage = () => {
+    if (!priceHistory || priceHistory.length < 2) return null;
+    
+    const currentPrice = priceHistory[0]?.price;
+    const previousPrice = priceHistory[priceHistory.length - 1]?.price;
+    
+    if (!currentPrice || !previousPrice) return null;
+    
+    const change = ((currentPrice - previousPrice) / previousPrice) * 100;
+    return change;
+  };
+
+  const prepareChartData = () => {
+    if (!priceHistory) return [];
+    
+    return priceHistory
+      .slice()
+      .reverse() // Show oldest to newest
+      .map((item, index) => ({
+        name: new Date(item.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        price: item.price,
+        timestamp: item.timestamp,
+      }));
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <AppHeader />
@@ -62,6 +124,82 @@ export default function AssetDetailPage() {
           <Skeleton className="h-10 w-1/3 mb-4" />
         ) : (
           <h1 className="text-3xl font-bold tracking-tight mb-4">{asset?.name} ({asset?.symbol})</h1>
+        )}
+
+        {/* Real-time Price Display */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <span>Current Price</span>
+              {getPriceChangeIndicator()}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoadingPrice ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-32" />
+                <Skeleton className="h-6 w-24" />
+              </div>
+            ) : priceData ? (
+              <div className="space-y-2">
+                <div className="text-4xl font-bold">${formatPrice(priceData.price)}</div>
+                {(() => {
+                  const changePercent = getPriceChangePercentage();
+                  if (changePercent !== null) {
+                    const isPositive = changePercent >= 0;
+                    return (
+                      <div className={`text-lg ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
+                        {isPositive ? '+' : ''}{changePercent.toFixed(2)}% (30d)
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+            ) : (
+              <div className="text-lg text-muted-foreground">Price unavailable</div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Price History Chart */}
+        {priceHistory && priceHistory.length > 0 && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Price History (30 Days)</CardTitle>
+              <CardDescription>Historical price movement for {asset?.symbol}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsLineChart data={prepareChartData()}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis 
+                      dataKey="name" 
+                      tick={{ fontSize: 12 }}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis 
+                      domain={['dataMin - 1', 'dataMax + 1']}
+                      tick={{ fontSize: 12 }}
+                    />
+                    <Tooltip 
+                      formatter={(value: number) => [`$${formatPrice(value)}`, 'Price']}
+                      labelFormatter={(label) => `Date: ${label}`}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="price" 
+                      stroke="#3b82f6" 
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </RechartsLineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
@@ -87,9 +225,7 @@ export default function AssetDetailPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center">
-                <div className="h-5 w-5 rounded-full bg-blue-100 mr-2 flex items-center justify-center">
-                  <div className="h-2 w-2 rounded-full bg-blue-500"></div>
-                </div>
+                <div className={`h-3 w-3 rounded-full mr-2 ${asset?.isActive ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                 {isLoadingAsset ? (
                   <Skeleton className="h-8 w-20" />
                 ) : (

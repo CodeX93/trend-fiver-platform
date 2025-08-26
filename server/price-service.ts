@@ -186,7 +186,7 @@ function checkRateLimit(): boolean {
   
   // Check if we're within limits
   if (current.count >= MAX_REQUESTS_PER_MINUTE) {
-    console.log(`Rate limit reached for ExchangeRate.host API. Resets in ${Math.ceil((current.resetTime - now) / 1000)} seconds`);
+          console.log(`Rate limit reached for ExchangeRate-API. Resets in ${Math.ceil((current.resetTime - now) / 1000)} seconds`);
     return false;
   }
   
@@ -213,11 +213,11 @@ async function getLiveForexPrice(symbol: string): Promise<number | null> {
       return null;
     }
 
-    // ExchangeRate.host API key (required for all endpoints)
-    const apiKey = process.env.EXCHANGERATE_API_KEY || '52c0f32f5f21dad8df22ebdf6d6c8c76';
+    // ExchangeRate-API key (required for all endpoints)
+    const apiKey = process.env.EXCHANGERATE_API_KEY || '535d82b57fa2cdc35abd9f96';
 
-    // Use ExchangeRate.host live endpoint for real-time rates
-    const apiUrl = `https://api.exchangerate.host/live?access_key=${apiKey}&base=${base}&currencies=${quote}`;
+    // Use ExchangeRate-API endpoint for real-time rates
+    const apiUrl = `https://v6.exchangerate-api.com/v6/${apiKey}/latest/${base}`;
 
     const response = await fetch(apiUrl, {
       headers: {
@@ -227,7 +227,7 @@ async function getLiveForexPrice(symbol: string): Promise<number | null> {
 
     if (!response.ok) {
       if (response.status === 429) {
-        console.error(`Rate limit exceeded for ExchangeRate.host API when fetching ${symbol}`);
+        console.error(`Rate limit exceeded for ExchangeRate-API when fetching ${symbol}`);
         // Mark rate limit as exceeded
         rateLimitMap.set('exchangerate', { count: MAX_REQUESTS_PER_MINUTE, resetTime: Date.now() + RATE_LIMIT_WINDOW });
         return await getAssetPrice(symbol); // Fallback to cached price
@@ -239,42 +239,35 @@ async function getLiveForexPrice(symbol: string): Promise<number | null> {
     const data = await response.json();
     
     // Handle API errors
-    if (data.success === false) {
-      console.error(`ExchangeRate.host API error:`, data.error);
+    if (data.result === 'error') {
+      console.error(`ExchangeRate-API error:`, data);
       return null;
     }
 
-    console.log(`ExchangeRate.host API response structure:`, Object.keys(data));
-    console.log(`ExchangeRate.host API response sample:`, {
-      success: data.success,
-      timestamp: data.timestamp,
-      source: data.source,
-      quotes: data.quotes ? Object.keys(data.quotes).slice(0, 3) : null
+    console.log(`ExchangeRate-API response structure:`, Object.keys(data));
+    console.log(`ExchangeRate-API response sample:`, {
+      result: data.result,
+      base_code: data.base_code,
+      target_code: data.target_code,
+      conversion_rate: data.conversion_rate
     });
 
-    // Handle different response formats
-    const rates = data.rates || data.quotes;
+    // Extract rate from the new API response format
+    const rates = data.conversion_rates;
     if (!rates) {
-      console.error('No rates/quotes data received from ExchangeRate.host');
+      console.error('No conversion_rates data received from ExchangeRate-API');
       console.error('Response structure:', Object.keys(data));
       return null;
     }
-
-    console.log(`Available rates/quotes:`, Object.keys(rates));
-
-    // Extract rate from the rates/quotes object
-    let rate: number | undefined;
-    if (data.rates) {
-      // Standard rates format
-      rate = data.rates[quote];
-    } else if (data.quotes) {
-      // Quotes format (e.g., "USDEUR": 0.85929)
-      const quoteKey = `${base}${quote}`;
-      rate = data.quotes[quoteKey];
+    
+    const rate = rates[quote];
+    if (!rate) {
+      console.error(`No conversion rate found for ${quote} in response`);
+      return null;
     }
 
     if (rate && typeof rate === 'number') {
-      console.log(`Live forex price for ${symbol}: ${rate} (via ExchangeRate.host live endpoint)`);
+      console.log(`Live forex price for ${symbol}: ${rate} (via ExchangeRate-API)`);
       return rate;
     }
 
@@ -370,7 +363,7 @@ async function fetchForexPrices() {
       return;
     }
 
-    // ExchangeRate.host API key (required for all endpoints)
+    // ExchangeRate-API key (required for all endpoints)
     const apiKey = process.env.EXCHANGERATE_API_KEY || '52c0f32f5f21dad8df22ebdf6d6c8c76';
 
     // Extract all unique currencies from forex assets
@@ -385,7 +378,7 @@ async function fetchForexPrices() {
 
     // Use USD as base and get all currencies in one request
     const currencyList = Array.from(currencies).join(',');
-    const apiUrl = `https://api.exchangerate.host/live?access_key=${apiKey}&base=USD&currencies=${currencyList}`;
+    const apiUrl = `https://v6.exchangerate-api.com/v6/${apiKey}/latest/USD`;
 
     console.log(`Fetching forex rates for currencies: ${currencyList}`);
 
@@ -397,7 +390,7 @@ async function fetchForexPrices() {
 
     if (!response.ok) {
       if (response.status === 429) {
-        console.error(`Rate limit exceeded for ExchangeRate.host API when fetching forex prices`);
+        console.error(`Rate limit exceeded for ExchangeRate-API when fetching forex prices`);
         // Mark rate limit as exceeded
         rateLimitMap.set('exchangerate', { count: MAX_REQUESTS_PER_MINUTE, resetTime: Date.now() + RATE_LIMIT_WINDOW });
         return;
@@ -409,16 +402,16 @@ async function fetchForexPrices() {
     const data = await response.json();
     
     // Handle API errors
-    if (data.success === false) {
-      console.error(`ExchangeRate.host API error:`, data.error);
+    if (data.result === 'error') {
+      console.error(`ExchangeRate-API error:`, data);
       return;
     }
 
-    console.log(`ExchangeRate.host API response:`, JSON.stringify(data, null, 2));
+    console.log(`ExchangeRate-API response:`, JSON.stringify(data, null, 2));
 
-    const rates = data.rates || data.quotes;
+    const rates = data.conversion_rates;
     if (!rates) {
-      console.error('No rates or quotes data received from ExchangeRate.host');
+      console.error('No conversion_rates data received from ExchangeRate-API');
       console.error('Response structure:', Object.keys(data));
       return;
     }
@@ -437,24 +430,24 @@ async function fetchForexPrices() {
         let price: number;
         if (rates) {
           if (base === 'USD') {
-            price = rates[`USD${quote}`] || rates[quote];
+            price = rates[quote];
           } else if (quote === 'USD') {
-            const baseRate = rates[`USD${base}`] || rates[base];
+            const baseRate = rates[base];
             price = 1 / baseRate;
           } else {
             // Cross-rate calculation: USD/quote / USD/base = base/quote
-            const baseRate = rates[`USD${base}`] || rates[base];
-            const quoteRate = rates[`USD${quote}`] || rates[quote];
+            const baseRate = rates[base];
+            const quoteRate = rates[quote];
             price = quoteRate / baseRate;
           }
         } else {
-          console.error('No valid rates or quotes data found');
+          console.error('No valid rates data found');
           continue;
         }
 
         if (price && typeof price === 'number' && isFinite(price)) {
           await storeAssetPrice(asset.id, price, 'exchangerate');
-          console.log(`Updated forex price for ${asset.symbol}: ${price} (via ExchangeRate.host live endpoint)`);
+          console.log(`Updated forex price for ${asset.symbol}: ${price} (via ExchangeRate-API)`);
         } else {
           console.error(`Invalid price data for ${asset.symbol}:`, price);
         }

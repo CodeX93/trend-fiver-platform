@@ -174,9 +174,303 @@ export async function initializeSlotConfigs() {
 // Lock state configuration - prevent predictions X minutes before slot start
 export const LOCK_BEFORE_START_MINUTES = 5; // Lock 5 minutes before slot starts
 
+// NEW: Check if a slot is locked (within LOCK_BEFORE_START_MINUTES of start)
+export function isSlotLocked(duration: DurationKey, slotNumber: number): boolean {
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const slotBoundaries = getFixedCESTBoundaries(duration);
+  
+  // Check if we're within the lock window
+  const lockTime = DateTime.fromJSDate(slotBoundaries.start).minus({ minutes: LOCK_BEFORE_START_MINUTES });
+  return now >= lockTime && now < DateTime.fromJSDate(slotBoundaries.start);
+}
+
+// NEW: Get lock status for a slot
+export function getSlotLockStatus(duration: DurationKey, slotNumber: number): {
+  isLocked: boolean;
+  timeUntilLock: number; // milliseconds until lock starts
+  timeUntilStart: number; // milliseconds until slot starts
+  timeUntilUnlock: number; // milliseconds until slot unlocks (starts)
+  lockStartTime: Date;
+  slotStartTime: Date;
+} {
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const slotBoundaries = getFixedCESTBoundaries(duration);
+  const lockStartTime = DateTime.fromJSDate(slotBoundaries.start).minus({ minutes: LOCK_BEFORE_START_MINUTES });
+  
+  const timeUntilLock = Math.max(0, lockStartTime.diff(now).toMillis());
+  const timeUntilStart = Math.max(0, DateTime.fromJSDate(slotBoundaries.start).diff(now).toMillis());
+  const timeUntilUnlock = timeUntilStart; // Slot unlocks when it starts
+  const isLocked = now >= lockStartTime && now < DateTime.fromJSDate(slotBoundaries.start);
+  
+  return {
+    isLocked,
+    timeUntilLock,
+    timeUntilStart,
+    timeUntilUnlock,
+    lockStartTime: lockStartTime.toJSDate(),
+    slotStartTime: slotBoundaries.start
+  };
+}
+
 // Get current CEST time using proper timezone library
 export function getCurrentCESTTime(): Date {
   return DateTime.now().setZone('Europe/Berlin').toJSDate();
+}
+
+// NEW: Fixed CEST boundary calculations for slot anchoring
+export function getFixedCESTBoundaries(duration: DurationKey, referenceDate?: Date): {
+  start: Date;
+  end: Date;
+  slotNumber: number;
+} {
+  const now = referenceDate ? DateTime.fromJSDate(referenceDate).setZone('Europe/Berlin') : DateTime.now().setZone('Europe/Berlin');
+  
+  let start: DateTime;
+  let end: DateTime;
+  let slotNumber: number;
+  
+  switch (duration) {
+    case '1h':
+      // Hourly: start at exact hour boundaries (00:00, 01:00, 02:00, etc.)
+      start = now.startOf('hour');
+      end = start.plus({ hours: 1 });
+      slotNumber = Math.floor(now.minute / 60) + 1;
+      break;
+      
+    case '3h':
+      // 3-hour: start at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
+      const hour3 = Math.floor(now.hour / 3) * 3;
+      start = now.set({ hour: hour3, minute: 0, second: 0, millisecond: 0 });
+      end = start.plus({ hours: 3 });
+      slotNumber = Math.floor(now.hour / 3) + 1;
+      break;
+      
+    case '6h':
+      // 6-hour: start at 00:00, 06:00, 12:00, 18:00
+      const hour6 = Math.floor(now.hour / 6) * 6;
+      start = now.set({ hour: hour6, minute: 0, second: 0, millisecond: 0 });
+      end = start.plus({ hours: 6 });
+      slotNumber = Math.floor(now.hour / 6) + 1;
+      break;
+      
+    case '24h':
+      // Daily: start at 00:00 each day
+      start = now.startOf('day');
+      end = start.plus({ days: 1 });
+      slotNumber = now.ordinal; // Day of year
+      break;
+      
+    case '48h':
+      // 48-hour: start every other day at 00:00
+      const day48 = Math.floor(now.ordinal / 2) * 2;
+      start = now.startOf('year').plus({ days: day48 - 1 });
+      end = start.plus({ days: 2 });
+      slotNumber = Math.floor(now.ordinal / 2) + 1;
+      break;
+      
+    case '1w':
+      // Weekly: start every Monday at 00:00
+      start = now.startOf('week').plus({ days: 1 }); // Monday
+      end = start.plus({ weeks: 1 });
+      slotNumber = now.weekNumber;
+      break;
+      
+    case '1m':
+      // Monthly: start on day 1 at 00:00
+      start = now.startOf('month');
+      end = start.plus({ months: 1 });
+      slotNumber = now.month;
+      break;
+      
+    case '3m':
+      // Quarterly: start on Jan 1, Apr 1, Jul 1, Oct 1 at 00:00
+      const quarter = Math.floor((now.month - 1) / 3);
+      const quarterMonth = quarter * 3 + 1;
+      start = now.set({ month: quarterMonth, day: 1 }).startOf('day');
+      end = start.plus({ months: 3 });
+      slotNumber = quarter + 1;
+      break;
+      
+    case '6m':
+      // Semi-annually: start on Jan 1 and Jul 1 at 00:00
+      const halfYear = Math.floor((now.month - 1) / 6);
+      const halfYearMonth = halfYear * 6 + 1;
+      start = now.set({ month: halfYearMonth, day: 1 }).startOf('day');
+      end = start.plus({ months: 6 });
+      slotNumber = halfYear + 1;
+      break;
+      
+    case '1y':
+      // Yearly: start on Jan 1 at 00:00
+      start = now.startOf('year');
+      end = start.plus({ years: 1 });
+      slotNumber = now.year;
+      break;
+      
+    default:
+      throw new Error(`Unsupported duration: ${duration}`);
+  }
+  
+  return {
+    start: start.toJSDate(),
+    end: end.toJSDate(),
+    slotNumber
+  };
+}
+
+// NEW: Get all slots for a duration with fixed CEST boundaries
+export function getAllSlotsForDuration(duration: DurationKey, count: number = 10): Array<{
+  slotNumber: number;
+  start: Date;
+  end: Date;
+  isActive: boolean;
+  timeRemaining: number;
+  pointsIfCorrect: number;
+  penaltyIfWrong: number;
+}> {
+  const now = DateTime.now().setZone('Europe/Berlin');
+  const slots = [];
+  
+  // Get current slot
+  const currentBoundaries = getFixedCESTBoundaries(duration);
+  
+  // Generate previous and next slots
+  for (let i = -Math.floor(count / 2); i < Math.floor(count / 2); i++) {
+    let referenceDate: DateTime;
+    
+    switch (duration) {
+      case '1h':
+        referenceDate = now.plus({ hours: i });
+        break;
+      case '3h':
+        referenceDate = now.plus({ hours: i * 3 });
+        break;
+      case '6h':
+        referenceDate = now.plus({ hours: i * 6 });
+        break;
+      case '24h':
+        referenceDate = now.plus({ days: i });
+        break;
+      case '48h':
+        referenceDate = now.plus({ days: i * 2 });
+        break;
+      case '1w':
+        referenceDate = now.plus({ weeks: i });
+        break;
+      case '1m':
+        referenceDate = now.plus({ months: i });
+        break;
+      case '3m':
+        referenceDate = now.plus({ months: i * 3 });
+        break;
+      case '6m':
+        referenceDate = now.plus({ months: i * 6 });
+        break;
+      case '1y':
+        referenceDate = now.plus({ years: i });
+        break;
+      default:
+        continue;
+    }
+    
+    const boundaries = getFixedCESTBoundaries(duration, referenceDate.toJSDate());
+    const isActive = now >= DateTime.fromJSDate(boundaries.start) && now < DateTime.fromJSDate(boundaries.end);
+    const timeRemaining = Math.max(0, DateTime.fromJSDate(boundaries.end).diff(now).toMillis());
+    
+    // Get points for this slot based on configuration
+    const config = SLOT_CONFIGURATIONS[duration];
+    const intervalIndex = Math.min(boundaries.slotNumber - 1, config.points.length - 1);
+    const pointsIfCorrect = config.points[intervalIndex];
+    const penaltyIfWrong = Math.max(1, Math.floor(pointsIfCorrect / 2));
+    
+    slots.push({
+      slotNumber: boundaries.slotNumber,
+      start: boundaries.start,
+      end: boundaries.end,
+      isActive,
+      timeRemaining,
+      pointsIfCorrect,
+      penaltyIfWrong
+    });
+  }
+  
+  // Sort by slot number
+  return slots.sort((a, b) => a.slotNumber - b.slotNumber);
+}
+
+// NEW: Get partitioned intervals for a slot based on the specification
+export function getPartitionedIntervals(duration: DurationKey, slotStart: Date, slotEnd: Date): Array<{
+  intervalNumber: number;
+  start: Date;
+  end: Date;
+  points: number;
+  label: string;
+}> {
+  const config = SLOT_CONFIGURATIONS[duration];
+  const intervals = [];
+  
+  for (let i = 0; i < config.intervals; i++) {
+    const intervalStart = new Date(slotStart.getTime() + (i * config.intervalDuration * 60 * 1000));
+    const intervalEnd = new Date(slotStart.getTime() + ((i + 1) * config.intervalDuration * 60 * 1000));
+    
+    // Ensure no gaps or overlaps
+    if (i > 0) {
+      intervalStart.setTime(intervals[i - 1].end.getTime());
+    }
+    if (i === config.intervals - 1) {
+      intervalEnd.setTime(slotEnd.getTime());
+    }
+    
+    let label: string;
+    switch (duration) {
+      case '1h':
+        label = `${intervalStart.getHours().toString().padStart(2, '0')}:${intervalStart.getMinutes().toString().padStart(2, '0')} - ${intervalEnd.getHours().toString().padStart(2, '0')}:${intervalEnd.getMinutes().toString().padStart(2, '0')}`;
+        break;
+      case '3h':
+        label = `${intervalStart.getHours().toString().padStart(2, '0')}:${intervalStart.getMinutes().toString().padStart(2, '0')} - ${intervalEnd.getHours().toString().padStart(2, '0')}:${intervalEnd.getMinutes().toString().padStart(2, '0')}`;
+        break;
+      case '6h':
+        label = `${intervalStart.getHours().toString().padStart(2, '0')}:00 - ${intervalEnd.getHours().toString().padStart(2, '0')}:00`;
+        break;
+      case '24h':
+        label = `${intervalStart.getHours().toString().padStart(2, '0')}:00 - ${intervalEnd.getHours().toString().padStart(2, '0')}:00`;
+        break;
+      case '48h':
+        label = `${intervalStart.getHours().toString().padStart(2, '0')}:00 - ${intervalEnd.getHours().toString().padStart(2, '0')}:00`;
+        break;
+      case '1w':
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        label = `${days[intervalStart.getDay()]} - ${days[intervalEnd.getDay()]}`;
+        break;
+      case '1m':
+        label = `Week ${i + 1}`;
+        break;
+      case '3m':
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        label = monthNames[intervalStart.getMonth()];
+        break;
+      case '6m':
+        const monthNames6m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        label = monthNames6m[intervalStart.getMonth()];
+        break;
+      case '1y':
+        const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
+        label = quarters[i];
+        break;
+      default:
+        label = `Interval ${i + 1}`;
+    }
+    
+    intervals.push({
+      intervalNumber: i + 1,
+      start: intervalStart,
+      end: intervalEnd,
+      points: config.points[i],
+      label
+    });
+  }
+  
+  return intervals;
 }
 
 // Get slot for a specific date
@@ -586,8 +880,11 @@ export interface EnhancedSlotInfo {
   timeRemaining?: number; // in milliseconds
   lockStatus: {
     isLocked: boolean;
+    timeUntilLock: number;
     timeUntilStart: number;
     timeUntilUnlock: number;
+    lockStartTime: Date;
+    slotStartTime: Date;
   };
 }
 
@@ -664,8 +961,11 @@ export function validateSlotSelection(duration: DurationKey, slotNumber: number)
   reason?: string;
   lockStatus?: {
     isLocked: boolean;
+    timeUntilLock: number;
     timeUntilStart: number;
     timeUntilUnlock: number;
+    lockStartTime: Date;
+    slotStartTime: Date;
   };
 } {
   try {
@@ -696,30 +996,4 @@ export function validateSlotSelection(duration: DurationKey, slotNumber: number)
   }
 } 
 
-// Check if slot is locked (within X minutes of start)
-export function isSlotLocked(duration: string, slotNumber: number): boolean {
-  const now = getCurrentCESTTime();
-  const slotTimes = getSlotTimes(duration, slotNumber);
-  const timeUntilStart = slotTimes.start.getTime() - now.getTime();
-  
-  // Lock if within X minutes of start
-  return timeUntilStart <= (LOCK_BEFORE_START_MINUTES * 60 * 1000);
-}
-
-// Get lock status for a slot
-export function getSlotLockStatus(duration: string, slotNumber: number): {
-  isLocked: boolean;
-  timeUntilStart: number;
-  timeUntilUnlock: number;
-} {
-  const now = getCurrentCESTTime();
-  const slotTimes = getSlotTimes(duration, slotNumber);
-  const timeUntilStart = slotTimes.start.getTime() - now.getTime();
-  const timeUntilUnlock = timeUntilStart - (LOCK_BEFORE_START_MINUTES * 60 * 1000);
-  
-  return {
-    isLocked: timeUntilStart <= (LOCK_BEFORE_START_MINUTES * 60 * 1000),
-    timeUntilStart: Math.max(0, timeUntilStart),
-    timeUntilUnlock: Math.max(0, timeUntilUnlock)
-  };
-} 
+ 

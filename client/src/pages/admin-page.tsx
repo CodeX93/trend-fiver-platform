@@ -1065,7 +1065,14 @@ export default function AdminPage() {
                           <TableBody>
                             {(Array.isArray(predictions) ? predictions : []).slice(0, 20).map((prediction) => (
                               <TableRow key={prediction.id}>
-                                <TableCell>{prediction.username || prediction.userId}</TableCell>
+                                <TableCell>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{prediction.username || 'No username'}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      ID: {prediction.userId.substring(0, 8)}...
+                                    </span>
+                                  </div>
+                                </TableCell>
                                 <TableCell>{prediction.assetSymbol || prediction.assetName || prediction.assetId}</TableCell>
                                 <TableCell>
                                   <Badge variant={prediction.direction === "up" ? "default" : "secondary"}>

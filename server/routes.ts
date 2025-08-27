@@ -195,13 +195,42 @@ router.get('/slots/:duration', async (req, res) => {
     const duration = req.params.duration as any;
     console.log(`Getting all slots for duration: ${duration}`);
     
-    const slots = await getEnhancedValidSlots(duration);
+    // Use new fixed CEST boundaries
+    const { getAllSlotsForDuration, getPartitionedIntervals } = await import('./slot-service');
+    
+    const slots = getAllSlotsForDuration(duration);
     console.log(`All slots result for ${duration}:`, slots?.length, 'slots');
     
-    return res.json(slots);
+    // Add partitioned intervals for each slot
+    const enhancedSlots = slots.map(slot => ({
+      ...slot,
+      intervals: getPartitionedIntervals(duration, slot.start, slot.end)
+    }));
+    
+    return res.json(enhancedSlots);
   } catch (e) {
     console.error('Error getting slots for duration', req.params.duration, ':', e);
     return res.status(400).json({ error: 'Invalid duration or server error', details: e instanceof Error ? e.message : 'Unknown error' });
+  }
+});
+
+// Get current slot for a duration with lock status
+router.get('/slots/:duration/current', async (req, res) => {
+  try {
+    const duration = req.params.duration as any;
+    const { getFixedCESTBoundaries, getSlotLockStatus, getPartitionedIntervals } = await import('./slot-service');
+    
+    const currentSlot = getFixedCESTBoundaries(duration);
+    const lockStatus = getSlotLockStatus(duration, currentSlot.slotNumber);
+    const intervals = getPartitionedIntervals(duration, currentSlot.start, currentSlot.end);
+    
+    res.json({
+      ...currentSlot,
+      lockStatus,
+      intervals
+    });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to get current slot' });
   }
 });
 
@@ -1083,7 +1112,7 @@ router.get('/sentiment/:assetSymbol/:duration', async (req, res) => {
         and(
           eq(predictions.assetId, asset.id),
           eq(predictions.duration, duration as any),
-          eq(predictions.status, 'active')
+          inArray(predictions.status, ['active', 'evaluated'])
         )
       )
       .groupBy(predictions.slotNumber, predictions.direction, predictions.slotStart, predictions.slotEnd);
@@ -1232,29 +1261,33 @@ router.get('/assets', async (req, res) => {
   }
 });
 
-// Get asset by symbol
-router.get('/assets/:symbol(*)', async (req, res) => {
+
+
+// Get live asset price (real-time from APIs) - MUST come before general price route
+router.get('/assets/:symbol/live-price', async (req, res) => {
   try {
-    console.log(`API: Asset route hit with params:`, req.params);
     const symbol = decodeURIComponent(req.params.symbol);
-    console.log(`API: Looking for asset with symbol: ${symbol}`);
+    const { getLiveAssetPrice } = await import('./price-service');
     
-    const asset = await getAssetBySymbol(symbol);
-    if (!asset) {
-      console.log(`API: Asset not found for symbol: ${symbol}`);
-      return res.status(404).json({ error: 'Asset not found' });
+    const price = await getLiveAssetPrice(symbol);
+    if (price === null) {
+      return res.status(404).json({ error: 'Asset not found or price unavailable' });
     }
     
-    console.log(`API: Found asset:`, { symbol: asset.symbol, name: asset.name, type: asset.type });
-    res.json(asset);
+    res.json({ 
+      symbol, 
+      price,
+      timestamp: new Date().toISOString(),
+      source: 'live'
+    });
   } catch (error) {
-    console.error('API: Error fetching asset:', error);
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get asset' });
+    console.error(`Error fetching live price for ${req.params.symbol}:`, error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get live asset price' });
   }
 });
 
-// Get asset price
-router.get('/assets/:symbol(*)/price', async (req, res) => {
+// Get asset price (cached from database)
+router.get('/assets/:symbol/price', async (req, res) => {
   try {
     const symbol = decodeURIComponent(req.params.symbol);
     const price = await getAssetPrice(symbol);
@@ -1304,6 +1337,27 @@ router.get('/assets/:symbol(*)/opinions', async (req, res) => {
   }
 });
 
+// Get asset by symbol (general route - must come after all specific routes)
+router.get('/assets/:symbol', async (req, res) => {
+  try {
+    console.log(`API: Asset route hit with params:`, req.params);
+    const symbol = decodeURIComponent(req.params.symbol);
+    console.log(`API: Looking for asset with symbol: ${symbol}`);
+    
+    const asset = await getAssetBySymbol(symbol);
+    if (!asset) {
+      console.log(`API: Asset not found for symbol: ${symbol}`);
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+    
+    console.log(`API: Found asset:`, { symbol: asset.symbol, name: asset.name, type: asset.type });
+    res.json(asset);
+  } catch (error) {
+    console.error('API: Error fetching asset:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get asset' });
+  }
+});
+
 // Create opinion for an asset
 router.post('/assets/:symbol(*)/opinions', authMiddleware, async (req, res) => {
   try {
@@ -1325,6 +1379,41 @@ router.post('/assets/:symbol(*)/opinions', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to create opinion' });
+  }
+});
+
+// Test price service debugging
+router.get('/test/price-debug/:symbol', async (req, res) => {
+  try {
+    const symbol = req.params.symbol;
+    const { getLiveAssetPrice, getAssetBySymbol } = await import('./price-service');
+    
+    console.log(`Testing price service for symbol: ${symbol}`);
+    
+    // Test asset lookup
+    const asset = await getAssetBySymbol(symbol);
+    console.log('Asset lookup result:', asset);
+    
+    if (!asset) {
+      return res.json({ error: 'Asset not found', symbol });
+    }
+    
+    // Test live price
+    const price = await getLiveAssetPrice(symbol);
+    console.log('Live price result:', price);
+    
+    res.json({
+      symbol,
+      asset,
+      price,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Price debug error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
   }
 });
 

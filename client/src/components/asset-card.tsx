@@ -143,10 +143,16 @@ export default function AssetCard({ asset }: AssetCardProps) {
           </div>
         </div>
       </CardContent>
-      <CardFooter className="pt-0">
+      <CardFooter className="pt-0 space-y-2">
         <Button asChild variant="outline" className="w-full">
           <Link href={`/assets/${encodeURIComponent(asset.symbol)}`}>
             View Details
+          </Link>
+        </Button>
+        <Button asChild className="w-full">
+          <Link href={`/predict/${encodeURIComponent(asset.symbol)}`}>
+            <TrendingUp className="h-4 w-4 mr-2" />
+            Make Prediction
           </Link>
         </Button>
       </CardFooter>

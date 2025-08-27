@@ -214,7 +214,12 @@ async function getLiveForexPrice(symbol: string): Promise<number | null> {
     }
 
     // ExchangeRate-API key (required for all endpoints)
-    const apiKey = process.env.EXCHANGERATE_API_KEY || '535d82b57fa2cdc35abd9f96';
+    const apiKey = process.env.EXCHANGERATE_API_KEY;
+    
+    if (!apiKey) {
+      console.error('EXCHANGERATE_API_KEY not configured');
+      return await getAssetPrice(symbol); // Fallback to cached price
+    }
 
     // Use ExchangeRate-API endpoint for real-time rates
     const apiUrl = `https://v6.exchangerate-api.com/v6/${apiKey}/latest/${base}`;
@@ -252,27 +257,35 @@ async function getLiveForexPrice(symbol: string): Promise<number | null> {
       conversion_rate: data.conversion_rate
     });
 
-    // Extract rate from the new API response format
-    const rates = data.conversion_rates;
-    if (!rates) {
-      console.error('No conversion_rates data received from ExchangeRate-API');
-      console.error('Response structure:', Object.keys(data));
-      return null;
+    // Extract rate from the API response format
+    let rate: number | null = null;
+    
+    // Try different response formats
+    if (data.conversion_rates && data.conversion_rates[quote]) {
+      rate = data.conversion_rates[quote];
+    } else if (data.conversion_rate) {
+      rate = data.conversion_rate;
+    } else if (data.rates && data.rates[quote]) {
+      rate = data.rates[quote];
     }
     
-    const rate = rates[quote];
-    if (!rate) {
-      console.error(`No conversion rate found for ${quote} in response`);
+    if (!rate || typeof rate !== 'number') {
+      console.error(`No valid conversion rate found for ${quote} in response`);
+      console.error('Response structure:', Object.keys(data));
+      console.error('Response data:', data);
+      
+      // Fallback to cached price if available
+      const cachedPrice = await getAssetPrice(symbol);
+      if (cachedPrice) {
+        console.log(`Using cached price for ${symbol}: ${cachedPrice}`);
+        return cachedPrice;
+      }
+      
       return null;
     }
 
-    if (rate && typeof rate === 'number') {
-      console.log(`Live forex price for ${symbol}: ${rate} (via ExchangeRate-API)`);
-      return rate;
-    }
-
-    console.error(`Invalid live forex price data for ${symbol}:`, data);
-    return null;
+    console.log(`Live forex price for ${symbol}: ${rate} (via ExchangeRate-API)`);
+    return rate;
   } catch (error) {
     console.error(`Error fetching live forex price for ${symbol}:`, error);
     return null;

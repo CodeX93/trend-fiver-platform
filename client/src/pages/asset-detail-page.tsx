@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useState } from "react";
 import AppHeader from "@/components/app-header";
-import PredictionForm from "@/components/prediction-form";
+import { EnhancedPredictionForm } from "@/components/enhanced-prediction-form";
 import SentimentChart from "@/components/sentiment-chart";
 import { Asset } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -318,12 +318,12 @@ export default function AssetDetailPage() {
                   </Card>
                 ) : (
                   asset && (
-                    <PredictionForm 
-                      assetId={asset.id} 
-                      assetSymbol={asset.symbol} 
-                      assetName={asset.name}
-                      selectedDuration={selectedDuration}
-                      onDurationChange={setSelectedDuration}
+                    <EnhancedPredictionForm 
+                      assetSymbol={asset.symbol}
+                      onSuccess={() => {
+                        // Refresh data after successful prediction
+                        window.location.reload();
+                      }}
                     />
                   )
                 )}

@@ -12,6 +12,7 @@ import AuthPage from "@/pages/auth-page";
 import AssetDetailPage from "@/pages/asset-detail-page";
 import LeaderboardPage from "@/pages/leaderboard-page";
 import ProfilePage from "@/pages/profile-page";
+import PredictionPage from "@/pages/prediction-page";
 import UserProfilePage from "@/pages/user-profile-page";
 import AdminPage from "@/pages/admin-page";
 import EmailVerificationPage from "@/pages/email-verification-page";
@@ -91,6 +92,7 @@ function Router() {
     <Switch>
       <Route path="/" component={HomePage} />
       <Route path="/assets/:symbol" component={AssetDetailPage} />
+      <ProtectedRoute path="/predict/:assetSymbol" component={PredictionPage} />
       <ProtectedRoute path="/leaderboard" component={LeaderboardPage} />
       <ProtectedRoute path="/profile" component={ProfilePage} />
       <Route path="/user/:username" component={UserProfilePage} />

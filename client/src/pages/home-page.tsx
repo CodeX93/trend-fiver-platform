@@ -39,6 +39,8 @@ export default function HomePage() {
   const stockAssets = assets?.filter(asset => asset.type === "stock") || [];
   const forexAssets = assets?.filter(asset => asset.type === "forex") || [];
 
+
+
   // Calculate overall statistics
   const totalAssets = assets?.length || 0;
   const activeAssets = assets?.filter(asset => asset.isActive).length || 0;

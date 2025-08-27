@@ -241,19 +241,21 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
   // Import predictions table to avoid circular dependency
   const { predictions } = await import('../shared/schema');
   
-  // Get all resolved predictions for the current month
+  // Get all predictions for the current month (both active and evaluated)
   const currentMonthPredictions = await db
     .select({
       userId: predictions.userId,
       pointsAwarded: predictions.pointsAwarded,
       result: predictions.result,
+      status: predictions.status,
+      slotStart: predictions.slotStart,
     })
     .from(predictions)
     .where(
       and(
-        eq(predictions.status, 'evaluated'),
-        gte(predictions.evaluatedAt, startOfMonth),
-        lte(predictions.evaluatedAt, endOfMonth)
+        inArray(predictions.status, ['active', 'evaluated']),
+        gte(predictions.slotStart, startOfMonth),
+        lte(predictions.slotStart, endOfMonth)
       )
     );
   
@@ -283,10 +285,15 @@ export async function getCurrentMonthLeaderboard(): Promise<LeaderboardEntry[]> 
     
     const stats = userStats.get(pred.userId)!;
     stats.totalPredictions++;
-    stats.totalScore += pred.pointsAwarded || 0;
-    if (pred.result === 'correct') {
-      stats.correctPredictions++;
+    
+    // For evaluated predictions, add points and count results
+    if (pred.status === 'evaluated') {
+      stats.totalScore += pred.pointsAwarded || 0;
+      if (pred.result === 'correct') {
+        stats.correctPredictions++;
+      }
     }
+    // For active predictions, they count towards total but don't contribute to score yet
   }
   
   // Convert to array and sort by score

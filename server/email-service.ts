@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: '../.env' });
 
 // Environment validation
 const FROM_EMAIL = process.env.FROM_EMAIL;

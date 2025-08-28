@@ -44,9 +44,19 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
       amount: 1.00,
     },
   });
+  
+  console.log('Form initialized with:', {
+    assetSymbol,
+    formValues: form.getValues(),
+    selectedSlot,
+    selectedDuration
+  });
 
   const createPredictionMutation = useMutation({
     mutationFn: async (data: PredictionFormData & { slotNumber: number }) => {
+      console.log('Creating prediction with data:', data);
+      console.log('Selected slot for mutation:', selectedSlot);
+      
       const response = await fetch('/api/predictions', {
         method: 'POST',
         headers: {
@@ -55,18 +65,22 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
         },
         body: JSON.stringify({
           ...data,
-          slotNumber: selectedSlot.slotNumber,
+          slotNumber: selectedSlot.slotNumber ?? 0,
         }),
       });
 
       if (!response.ok) {
         const error = await response.json();
+        console.error('Prediction creation failed:', error);
         throw new Error(error.error || 'Failed to create prediction');
       }
-
-      return response.json();
+      
+      const result = await response.json();
+      console.log('Prediction created successfully:', result);
+      return result;
     },
     onSuccess: () => {
+      console.log('Prediction creation succeeded');
       toast({
         title: 'Success!',
         description: 'Your prediction has been submitted successfully.',
@@ -82,6 +96,7 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
       onSuccess?.();
     },
     onError: (error: Error) => {
+      console.error('Prediction creation failed with error:', error);
       toast({
         title: 'Error',
         description: error.message || 'Failed to submit prediction',
@@ -90,17 +105,25 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
     },
   });
 
-  const onSubmit = (data: PredictionFormData) => {
-    if (!selectedSlot) {
+    const onSubmit = (data: PredictionFormData) => {
+    console.log('Form submitted with data:', data);
+    console.log('Selected slot:', selectedSlot);
+    
+    if (!selectedSlot || !selectedSlot.slotNumber) {
       toast({
         title: 'No Slot Selected',
-        description: 'Please select a slot before submitting your prediction.',
+        description: 'Please select a valid slot before submitting your prediction.',
         variant: 'destructive',
       });
       return;
     }
 
     // Check if slot is locked
+    console.log('Checking if slot is locked:', {
+      timeRemaining: selectedSlot.timeRemaining,
+      isLocked: selectedSlot.timeRemaining <= 300000
+    });
+    
     if (selectedSlot.timeRemaining <= 300000) { // 5 minutes before start
       toast({
         title: 'Slot Locked',
@@ -110,10 +133,12 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
       return;
     }
 
-    createPredictionMutation.mutate({
+    const mutationData = {
       ...data,
       slotNumber: selectedSlot.slotNumber,
-    });
+    };
+    console.log('Calling mutation with data:', mutationData);
+    createPredictionMutation.mutate(mutationData);
   };
 
   const handleDurationChange = (duration: string) => {
@@ -123,6 +148,7 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
   };
 
   const handleSlotSelect = (slot: any) => {
+    console.log('Slot selected in form:', slot);
     setSelectedSlot(slot);
   };
 
@@ -251,24 +277,38 @@ export function EnhancedPredictionForm({ assetSymbol, onSuccess }: EnhancedPredi
             </div>
 
             {/* Selected Slot Info */}
-            {selectedSlot && (
+            {(() => {
+              console.log('Rendering selected slot info:', selectedSlot);
+              return selectedSlot && (
               <Card className="bg-muted/50">
                 <CardContent className="pt-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium">Selected Slot</span>
-                    <Badge variant={selectedSlot.isActive ? "default" : "secondary"}>
-                      Slot {selectedSlot.slotNumber}
+                    <Badge variant={(selectedSlot.isActive ?? false) ? "default" : "secondary"}>
+                      Slot {selectedSlot.slotNumber ?? 'Unknown'}
                     </Badge>
                   </div>
                   
                   <div className="text-xs text-muted-foreground space-y-1">
-                    <div>Time: {new Date(selectedSlot.start).toLocaleString('en-GB', { timeZone: 'Europe/Berlin' })} - {new Date(selectedSlot.end).toLocaleString('en-GB', { timeZone: 'Europe/Berlin' })}</div>
-                    <div>Points: {selectedSlot.pointsIfCorrect}</div>
-                    <div>Status: {selectedSlot.timeRemaining <= 300000 ? 'Locked' : 'Open'}</div>
+                    <div>Time: {(() => {
+                      try {
+                        const startDate = new Date(selectedSlot.start);
+                        const endDate = new Date(selectedSlot.end);
+                        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+                          return 'Invalid Date';
+                        }
+                        return `${startDate.toLocaleString('en-GB', { timeZone: 'Europe/Berlin' })} - ${endDate.toLocaleString('en-GB', { timeZone: 'Europe/Berlin' })}`;
+                      } catch (error) {
+                        return 'Invalid Date';
+                      }
+                    })()}</div>
+                    <div>Points: {selectedSlot.pointsIfCorrect || 0}</div>
+                    <div>Status: {!selectedSlot.timeRemaining || selectedSlot.timeRemaining <= 300000 ? 'Locked' : 'Open'}</div>
                   </div>
                 </CardContent>
               </Card>
-            )}
+            );
+            })()}
 
             {/* Submit Button */}
             <Button

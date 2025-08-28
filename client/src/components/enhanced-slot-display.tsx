@@ -15,14 +15,14 @@ interface Interval {
 }
 
 interface Slot {
-  slotNumber: number;
-  start: Date;
-  end: Date;
-  isActive: boolean;
-  timeRemaining: number;
-  pointsIfCorrect: number;
-  penaltyIfWrong: number;
-  intervals: Interval[];
+  slotNumber?: number;
+  start: Date | string;
+  end: Date | string;
+  isActive?: boolean;
+  timeRemaining?: number;
+  pointsIfCorrect?: number;
+  penaltyIfWrong?: number;
+  intervals?: Interval[];
 }
 
 interface LockStatus {
@@ -58,39 +58,79 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
     queryFn: async () => {
       const response = await fetch(`/api/slots/${duration}`);
       if (!response.ok) throw new Error('Failed to fetch slots');
-      return response.json() as Slot[];
+      const data = await response.json();
+      console.log('Slots data received:', data);
+      console.log('First slot structure:', data[0]);
+      return data as Slot[];
     },
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 
   const formatTimeRemaining = (milliseconds: number): string => {
-    if (milliseconds <= 0) return '00:00:00';
-    
-    const seconds = Math.floor(milliseconds / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-    
-    if (days > 0) {
-      return `${days}d ${hours % 24}h ${minutes % 60}m`;
-    } else if (hours > 0) {
-      return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds % 60}s`;
-    } else {
-      return `${seconds}s`;
+    try {
+      console.log('formatTimeRemaining called with:', milliseconds, typeof milliseconds);
+      
+      if (typeof milliseconds !== 'number' || isNaN(milliseconds)) {
+        console.warn('Invalid milliseconds value:', milliseconds);
+        return 'Invalid Time';
+      }
+      
+      if (milliseconds <= 0) return '00:00:00';
+      
+      const seconds = Math.floor(milliseconds / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const days = Math.floor(hours / 24);
+      
+      const result = days > 0 
+        ? `${days}d ${hours % 24}h ${minutes % 60}m`
+        : hours > 0 
+        ? `${hours}h ${minutes % 60}m ${seconds % 60}s`
+        : minutes > 0 
+        ? `${minutes}m ${seconds % 60}s`
+        : `${seconds}s`;
+      
+      console.log('formatTimeRemaining result:', result);
+      return result;
+    } catch (error) {
+      console.error('Error in formatTimeRemaining:', error, milliseconds);
+      return 'Error';
     }
   };
 
-  const formatCESTTime = (date: Date): string => {
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Berlin',
-      hour: '2-digit',
-      minute: '2-digit',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    }).format(date);
+  const formatCESTTime = (date: Date | string): string => {
+    try {
+      console.log('formatCESTTime called with:', date, typeof date);
+      
+      if (!date) {
+        console.warn('formatCESTTime: date is falsy:', date);
+        return 'No Date';
+      }
+      
+      const dateObj = date instanceof Date ? date : new Date(date);
+      console.log('dateObj created:', dateObj, 'isValid:', !isNaN(dateObj.getTime()));
+      
+      // Check if the date is valid
+      if (isNaN(dateObj.getTime())) {
+        console.warn('formatCESTTime: Invalid date object:', dateObj);
+        return 'Invalid Date';
+      }
+      
+      const formatted = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Berlin',
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      }).format(dateObj);
+      
+      console.log('formatCESTTime result:', formatted);
+      return formatted;
+    } catch (error) {
+      console.error('Error formatting date:', error, date);
+      return 'Invalid Date';
+    }
   };
 
   const getDurationLabel = (duration: string): string => {
@@ -173,13 +213,33 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
         </Badge>
       </div>
 
-      {slots.map((slot) => {
+      {(() => {
+        console.log('All slots before filtering:', slots);
+        const validSlots = slots.filter(slot => {
+          const isValid = slot.start && slot.end && slot.slotNumber !== undefined;
+          if (!isValid) {
+            console.warn('Invalid slot filtered out:', slot);
+          }
+          return isValid;
+        });
+        console.log('Valid slots after filtering:', validSlots);
+        return validSlots.map((slot) => {
         const isSelected = selectedSlot?.slotNumber === slot.slotNumber;
-        const isLocked = slot.timeRemaining <= 0 || (slot.timeRemaining <= 300000); // 5 minutes before start
+        console.log('Slot selection check:', {
+          slotNumber: slot.slotNumber,
+          selectedSlotNumber: selectedSlot?.slotNumber,
+          isSelected
+        });
+        const isLocked = !slot.timeRemaining || slot.timeRemaining <= 0 || (slot.timeRemaining <= 300000); // 5 minutes before start
+        console.log('Slot lock status:', {
+          slotNumber: slot.slotNumber,
+          timeRemaining: slot.timeRemaining,
+          isLocked
+        });
         
         return (
           <Card 
-            key={slot.slotNumber} 
+            key={slot.slotNumber ?? 'unknown'} 
             className={`transition-all duration-200 ${
               isSelected 
                 ? 'ring-2 ring-primary border-primary' 
@@ -190,10 +250,10 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <CardTitle className="text-base">
-                    Slot {slot.slotNumber}
+                    Slot {slot.slotNumber ?? 'Unknown'}
                   </CardTitle>
-                  <Badge variant={slot.isActive ? "default" : "secondary"}>
-                    {slot.isActive ? "Active" : "Upcoming"}
+                  <Badge variant={(slot.isActive ?? false) ? "default" : "secondary"}>
+                    {(slot.isActive ?? false) ? "Active" : "Upcoming"}
                   </Badge>
                 </div>
                 
@@ -211,7 +271,7 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
                   )}
                   
                   <div className="text-sm text-muted-foreground">
-                    {slot.pointsIfCorrect} pts
+                    {slot.pointsIfCorrect || 0} pts
                   </div>
                 </div>
               </div>
@@ -226,20 +286,35 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
                     <span className="font-medium">Time Window (CEST)</span>
                   </div>
                   <span className="text-muted-foreground">
-                    {formatCESTTime(slot.start)} - {formatCESTTime(slot.end)}
+                    {(() => {
+                      console.log('Formatting start date:', slot.start, typeof slot.start);
+                      console.log('Formatting end date:', slot.end, typeof slot.end);
+                      return `${formatCESTTime(slot.start)} - ${formatCESTTime(slot.end)}`;
+                    })()}
                   </span>
                 </div>
               </div>
 
               {/* Live Countdown */}
-              {slot.timeRemaining > 0 && (
+              {slot.timeRemaining && slot.timeRemaining > 0 && (
                 <div className="bg-primary/10 p-3 rounded-lg">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium">
-                      {slot.isActive ? "Ends in:" : "Starts in:"}
+                      {(slot.isActive ?? false) ? "Ends in:" : "Starts in:"}
                     </span>
                     <span className="text-lg font-mono font-bold text-primary">
-                      {formatTimeRemaining(slot.timeRemaining)}
+                      {(() => {
+                        try {
+                          if (typeof slot.timeRemaining !== 'number' || isNaN(slot.timeRemaining)) {
+                            console.warn('Invalid timeRemaining:', slot.timeRemaining);
+                            return 'Invalid Time';
+                          }
+                          return formatTimeRemaining(slot.timeRemaining);
+                        } catch (error) {
+                          console.error('Error formatting time remaining:', error);
+                          return 'Error';
+                        }
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -251,26 +326,40 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
                   Intervals & Points
                 </h4>
                 <div className="grid grid-cols-2 gap-2">
-                  {slot.intervals?.map((interval) => (
+                  {(() => {
+                    console.log('Slot intervals:', {
+                      slotNumber: slot.slotNumber,
+                      intervals: slot.intervals,
+                      isArray: Array.isArray(slot.intervals)
+                    });
+                    return slot.intervals && Array.isArray(slot.intervals) ? slot.intervals.map((interval) => (
                     <div 
                       key={interval.intervalNumber}
                       className="bg-muted/50 p-2 rounded text-xs"
                     >
                       <div className="font-medium text-center text-primary">
-                        {interval.points} pts
+                        {interval.points || 0} pts
                       </div>
                       <div className="text-center text-muted-foreground">
-                        {interval.label}
+                        {interval.label || 'Unknown'}
                       </div>
                     </div>
-                  ))}
+                  )) : (
+                    <div className="text-xs text-muted-foreground text-center col-span-2">
+                      No intervals available
+                    </div>
+                  );
+                  })()}
                 </div>
               </div>
 
               {/* Action Button */}
               <div className="flex justify-center">
                 <Button
-                  onClick={() => onSlotSelect?.(slot)}
+                  onClick={() => {
+                    console.log('Slot selected:', slot);
+                    onSlotSelect?.(slot);
+                  }}
                   disabled={isLocked}
                   variant={isSelected ? "default" : "outline"}
                   className="w-full"
@@ -296,7 +385,9 @@ export function EnhancedSlotDisplay({ duration, onSlotSelect, selectedSlot }: En
             </CardContent>
           </Card>
         );
-      })}
+      });
+      })()}
     </div>
   );
 }
+

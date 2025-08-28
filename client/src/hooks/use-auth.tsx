@@ -1,21 +1,32 @@
-import { createContext, ReactNode, useContext, useEffect } from "react";
+import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import {
   useQuery,
   useMutation,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { User, UserProfile } from "@shared/schema";
+import { UserProfile } from "@shared/schema";
 import { getQueryFn, apiRequest, queryClient } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { registerWithEmailAndPassword, sendPasswordReset, loginWithEmailAndPassword, logout as firebaseLogout, onAuthStateChange } from "../lib/firebase-auth";
+import { auth } from "../lib/firebase";
+
+// Client-side User type (simplified from schema)
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  emailVerified: boolean;
+  role: 'user' | 'admin';
+}
 
 type AuthContextType = {
   user: User | null;
   profile: UserProfile | null;
   isLoading: boolean;
   error: Error | null;
-  loginMutation: UseMutationResult<{ user: User; profile: UserProfile; token: string }, Error, LoginData>;
+  loginMutation: UseMutationResult<void, Error, LoginData>;
   logoutMutation: UseMutationResult<void, Error, void>;
-  registerMutation: UseMutationResult<{ user: User; profile: UserProfile; token: string }, Error, RegisterData>;
+  registerMutation: UseMutationResult<void, Error, RegisterData>;
   verifyEmailMutation: UseMutationResult<{ message: string }, Error, { token: string }>;
   requestPasswordResetMutation: UseMutationResult<{ message: string }, Error, { email: string }>;
   resetPasswordMutation: UseMutationResult<{ message: string }, Error, ResetPasswordData>;
@@ -42,55 +53,70 @@ export const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   
-  // Check if user is authenticated on mount
+  // Firebase authentication state
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  
+  // Listen to Firebase authentication state changes
   useEffect(() => {
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      // Invalidate queries to refetch user data
-      queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
-    }
-  }, []);
+    const unsubscribe = onAuthStateChange((firebaseUser) => {
+      setIsLoading(true);
+      
+      if (firebaseUser) {
+        // User is signed in
+        const userData: User = {
+          id: firebaseUser.uid,
+          username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+          email: firebaseUser.email!,
+          emailVerified: firebaseUser.emailVerified,
+          role: 'user' as const,
+        };
+        
+        setUser(userData);
+        setProfile(null); // You can create a profile later if needed
+        setError(null);
+      } else {
+        // User is signed out
+        setUser(null);
+        setProfile(null);
+        setError(null);
+      }
+      
+      setIsLoading(false);
+    });
+    
+          // Cleanup subscription on unmount
+      return () => unsubscribe();
+    }, []);
+    
 
-  const {
-    data: user,
-    error,
-    isLoading,
-  } = useQuery<User | undefined, Error>({
-    queryKey: ["/api/user/me"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: !!localStorage.getItem('authToken'),
-  });
-
-  const {
-    data: profile,
-  } = useQuery<UserProfile | undefined, Error>({
-    queryKey: ["/api/user/profile"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: !!user,
-  });
 
   const loginMutation = useMutation({
     mutationFn: async (credentials: LoginData) => {
-      const res = await apiRequest("POST", "/api/auth/login", credentials);
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Login failed');
+      try {
+        // Use Firebase for login
+        await loginWithEmailAndPassword(
+          credentials.email, 
+          credentials.password
+        );
+        // Note: User state is automatically updated by Firebase auth listener
+      } catch (error: any) {
+        console.error('Firebase login error:', error);
+        throw new Error(error.message || 'Login failed');
       }
-      const data = await res.json();
-      
-      // Store the JWT token in localStorage
-      if (data.token) {
-        localStorage.setItem('authToken', data.token);
-      }
-      
-      return data;
     },
-    onSuccess: (data: { user: User; profile: UserProfile; token: string }) => {
-      queryClient.setQueryData(["/api/user/profile"], data.user);
+    onSuccess: () => {
       toast({
         title: "Login successful",
-        description: `Welcome back, ${data.user.username}!`,
+        description: "Welcome back!",
       });
+      // Note: User state is automatically updated by Firebase auth listener
+      // Redirect to home page after successful login
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 1500);
     },
     onError: (error: Error) => {
       toast({
@@ -103,30 +129,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const registerMutation = useMutation({
     mutationFn: async (credentials: RegisterData) => {
-      const res = await apiRequest("POST", "/api/auth/register", credentials);
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Registration failed');
+      try {
+        // Use Firebase for registration
+        await registerWithEmailAndPassword(
+          credentials.email, 
+          credentials.password, 
+          credentials.username
+        );
+        // Note: User state is automatically updated by Firebase auth listener
+      } catch (error: any) {
+        console.error('Firebase registration error:', error);
+        throw new Error(error.message || 'Registration failed');
       }
-      const data = await res.json();
-      
-      // Store the JWT token in localStorage if auto-verified
-      if (data.token) {
-        localStorage.setItem('authToken', data.token);
-      }
-      
-      return data;
     },
-    onSuccess: (data: { user: User; profile: UserProfile; token: string }) => {
-      if (data.token) {
-        queryClient.setQueryData(["/api/user/profile"], data.user);
-      }
+    onSuccess: () => {
       toast({
         title: "Registration successful",
-        description: data.token 
-          ? `Welcome, ${data.user.username}!` 
-          : `Welcome, ${data.user.username}! Please check your email to verify your account.`,
+        description: "Welcome! Please check your email to verify your account.",
       });
+      
+      // Note: Firebase handles email verification automatically
+      // Users will receive a verification email from Firebase
+      // User state is automatically updated by Firebase auth listener
+      // Redirect to home page after successful registration
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 1500);
     },
     onError: (error: Error) => {
       toast({
@@ -165,12 +193,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requestPasswordResetMutation = useMutation({
     mutationFn: async ({ email }: { email: string }) => {
-      const res = await apiRequest("POST", "/api/auth/request-reset", { email });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Password reset request failed');
+      try {
+        // Use Firebase for password reset
+        await sendPasswordReset(email);
+        return { message: 'Password reset email sent successfully. Please check your inbox.' };
+      } catch (error: any) {
+        console.error('Firebase password reset error:', error);
+        throw new Error(error.message || 'Password reset request failed');
       }
-      return await res.json();
     },
     onSuccess: (data: { message: string }) => {
       toast({
@@ -213,10 +243,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      // Remove the JWT token from localStorage
-      localStorage.removeItem('authToken');
-      // Clear all query cache
-      queryClient.clear();
+      try {
+        // Use Firebase for logout
+        await firebaseLogout();
+        // Clear all query cache
+        queryClient.clear();
+      } catch (error: any) {
+        console.error('Firebase logout error:', error);
+        throw error;
+      }
     },
     onSuccess: () => {
       queryClient.setQueryData(["/api/user/profile"], null);

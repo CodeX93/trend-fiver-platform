@@ -339,6 +339,15 @@ export default function AuthPage() {
                         Forgot your password?
                       </Button>
                     </div>
+                    
+                    {/* Email verification reminder */}
+                    <Alert className="mt-4">
+                      <Mail className="h-4 w-4" />
+                      <AlertDescription>
+                        Can't log in? Make sure you've verified your email address. 
+                        Check your inbox for the verification link.
+                      </AlertDescription>
+                    </Alert>
                   </form>
                 </Form>
               </TabsContent>
@@ -450,6 +459,15 @@ export default function AuthPage() {
                         "Create Account"
                       )}
                     </Button>
+                    
+                    {/* Email verification info */}
+                    <Alert className="mt-4">
+                      <Mail className="h-4 w-4" />
+                      <AlertDescription>
+                        After creating your account, you'll receive a verification email. 
+                        Please check your inbox and click the verification link to activate your account.
+                      </AlertDescription>
+                    </Alert>
                   </form>
                 </Form>
               </TabsContent>

@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { Loader2, TrendingUp, TrendingDown, Clock, AlertTriangle, CheckCircle, Star, Lock } from "lucide-react";
 
 interface PredictionFormProps {
@@ -55,6 +56,7 @@ interface SlotUpdate {
 
 export default function PredictionForm({ assetId, assetSymbol, assetName, selectedDuration: propSelectedDuration, onDurationChange }: PredictionFormProps) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [internalSelectedDuration, setInternalSelectedDuration] = useState<string>("24h");
   const [activeSlot, setActiveSlot] = useState<SlotInfo | null>(null);
   const [realTimeCountdown, setRealTimeCountdown] = useState<number | null>(null);
@@ -62,6 +64,16 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
   // Use prop duration if provided, otherwise use internal state
   const selectedDuration = propSelectedDuration || internalSelectedDuration;
   const setSelectedDuration = onDurationChange || setInternalSelectedDuration;
+
+  // Debug logging for authentication
+  useEffect(() => {
+    console.log('🔐 PredictionForm - Authentication state:', {
+      user: user ? 'Authenticated' : 'Not authenticated',
+      userId: user?.id,
+      email: user?.email,
+      emailVerified: user?.emailVerified
+    });
+  }, [user]);
 
   const form = useForm<PredictionFormData>({
     resolver: zodResolver(predictionSchema),
@@ -136,6 +148,8 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
 
   const mutation = useMutation({
     mutationFn: async (data: PredictionFormData) => {
+      console.log('🔐 PredictionForm - mutationFn called with data:', data);
+      
       if (!activeSlot) {
         throw new Error("No active slot available");
       }
@@ -146,10 +160,14 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
         duration: data.duration,
       };
 
+      console.log('🔐 PredictionForm - Making API request with payload:', payload);
       const res = await apiRequest("POST", "/api/predictions", payload);
+      console.log('🔐 PredictionForm - API response received:', res.status, res.statusText);
+      
       return res.json();
     },
     onSuccess: () => {
+      console.log('🔐 PredictionForm - Prediction submitted successfully');
       toast({
         title: "Prediction submitted",
         description: "Your prediction has been successfully submitted.",
@@ -165,6 +183,7 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
       queryClient.invalidateQueries({ queryKey: ["/api/admin/predictions"] });
     },
     onError: (error: Error) => {
+      console.error('🔐 PredictionForm - Prediction submission failed:', error);
       toast({
         title: "Submission failed",
         description: error.message,
@@ -174,6 +193,33 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
   });
 
   const onSubmit = (data: PredictionFormData) => {
+    // Debug logging for submission
+    console.log('🔐 PredictionForm - onSubmit called:', {
+      user: user ? 'Authenticated' : 'Not authenticated',
+      userId: user?.id,
+      email: user?.email,
+      emailVerified: user?.emailVerified,
+      formData: data
+    });
+
+    if (!user) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to make predictions.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!user.emailVerified) {
+      toast({
+        title: "Email verification required",
+        description: "Please verify your email before making predictions.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!activeSlot?.isActive) {
       toast({
         title: "Slot not active",
@@ -195,6 +241,7 @@ export default function PredictionForm({ assetId, assetSymbol, assetName, select
       return;
     }
 
+    console.log('🔐 PredictionForm - Submitting prediction...');
     mutation.mutate(data);
   };
 

@@ -1,40 +1,37 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getIdToken } from "./firebase-auth";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     
-    // If unauthorized, clear the token
+    // If unauthorized, clear any stored tokens
     if (res.status === 401) {
-      localStorage.removeItem('authToken');
+      // Clear any stored JWT tokens (for backward compatibility)
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('authToken');
+      }
     }
     
     throw new Error(`${res.status}: ${text}`);
   }
 }
 
-// Get auth token from localStorage
-function getAuthToken(): string | null {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('authToken');
+// Get Firebase ID token for authentication
+async function getAuthToken(): Promise<string | null> {
+  try {
+    console.log('🔐 Getting Firebase ID token...');
+    const token = await getIdToken();
+    console.log('🔐 Token retrieved:', token ? 'Yes' : 'No');
     if (token) {
-      // Check if token is expired
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload.exp && payload.exp * 1000 < Date.now()) {
-          // Token is expired, remove it
-          localStorage.removeItem('authToken');
-          return null;
-        }
-      } catch (error) {
-        // Invalid token, remove it
-        localStorage.removeItem('authToken');
-        return null;
-      }
+      console.log('🔐 Token length:', token.length);
+      console.log('🔐 Token preview:', token.substring(0, 20) + '...');
     }
     return token;
+  } catch (error) {
+    console.error('🔐 Error getting auth token:', error);
+    return null;
   }
-  return null;
 }
 
 export async function apiRequest(
@@ -49,7 +46,7 @@ export async function apiRequest(
   }
   
   // Add authorization header if token exists
-  const token = getAuthToken();
+  const token = await getAuthToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -66,19 +63,9 @@ export async function apiRequest(
 
   // Only remove token on 401 if it's a real authentication failure
   if (res.status === 401) {
-    // Check if the token is actually expired or invalid
-    const token = getAuthToken();
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        if (payload.exp && payload.exp * 1000 < Date.now()) {
-          // Token is actually expired, remove it
-          localStorage.removeItem('authToken');
-        }
-      } catch (error) {
-        // Invalid token format, remove it
-        localStorage.removeItem('authToken');
-      }
+    // Clear any stored JWT tokens (for backward compatibility)
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('authToken');
     }
   }
 
@@ -94,7 +81,7 @@ export const getQueryFn: <T>(options: {
     const headers: Record<string, string> = {};
     
     // Add authorization header if token exists
-    const token = getAuthToken();
+    const token = await getAuthToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }

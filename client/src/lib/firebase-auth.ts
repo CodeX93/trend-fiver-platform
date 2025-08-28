@@ -172,4 +172,20 @@ export function isAuthenticatedAndVerified(): boolean {
 // Check if user is authenticated (regardless of email verification)
 export function isAuthenticated(): boolean {
   return auth.currentUser !== null;
+}
+
+// Get current user's ID token for backend authentication
+export async function getIdToken(): Promise<string | null> {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return null;
+    }
+    
+    const token = await user.getIdToken();
+    return token;
+  } catch (error) {
+    console.error('Error getting ID token:', error);
+    return null;
+  }
 } 

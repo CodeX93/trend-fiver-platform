@@ -64,28 +64,8 @@ import {
   getUserPredictionStats,
   getUserPredictions,
 } from './prediction-service';
-import { initializeApp, getApps } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { getAdminAuth } from './firebase-admin';
 import { getUserByEmail } from './user-service';
-
-// Initialize Firebase Admin if not already initialized
-if (!getApps().length) {
-  try {
-    // For development - use default credentials with project ID
-    if (process.env.FIREBASE_PROJECT_ID) {
-      console.log(`🔥 Initializing Firebase Admin with project: ${process.env.FIREBASE_PROJECT_ID}`);
-      initializeApp({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-      });
-    } else {
-      // Fallback to default credentials
-      console.log('⚠️  Using default Firebase credentials. Set FIREBASE_PROJECT_ID for production.');
-      initializeApp();
-    }
-  } catch (error) {
-    console.error('Failed to initialize Firebase Admin:', error);
-  }
-}
 import { 
   getActiveSlot, 
   getAllSlots, 
@@ -260,13 +240,52 @@ router.post('/slots/:duration/:slotNumber/validate', async (req, res) => {
 router.use(express.json());
 
 // Authentication middleware
-const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const user = extractUserFromToken(req.headers.authorization);
-  if (!user) {
-    return res.status(401).json({ error: 'Authentication required' });
+const authMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    let user = null;
+
+    // Try Firebase ID token first
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      
+      try {
+        // Verify Firebase ID token
+        const decodedToken = await getAdminAuth().verifyIdToken(token);
+        user = {
+          userId: decodedToken.uid,
+          email: decodedToken.email || '',
+          role: 'user', // Default role for Firebase users
+        };
+      } catch (firebaseError) {
+        console.log('Firebase token verification failed, trying JWT...');
+        
+        // Fallback to JWT verification
+        try {
+          user = extractUserFromToken(authHeader);
+        } catch (jwtError) {
+          console.log('JWT verification also failed');
+          return res.status(401).json({ error: 'Invalid authentication token' });
+        }
+      }
+    } else {
+      return res.status(401).json({ error: 'Invalid authorization header format' });
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    return res.status(500).json({ error: 'Authentication error' });
   }
-  req.user = user;
-  next();
 };
 
 // Optional authentication middleware - doesn't require auth but sets user if available
@@ -323,12 +342,30 @@ router.post('/admin/slots', adminMiddleware, async (req, res) => {
 // Middleware to check if user's email is verified
 const emailVerifiedMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   try {
-    const user = await getUserById(requireUser(req).userId);
-    if (!user) {
+    const user = requireUser(req);
+    
+    // For Firebase users, check if email is verified from the token
+    if (user.email && user.userId) {
+      try {
+        // Get user info from Firebase Admin to check email verification
+        const firebaseUser = await getAdminAuth().getUser(user.userId);
+        if (!firebaseUser.emailVerified) {
+          return res.status(403).json({ error: 'Email verification required. Please verify your email before accessing this feature.' });
+        }
+        next();
+        return;
+      } catch (firebaseError) {
+        console.log('Failed to get Firebase user, falling back to database check');
+      }
+    }
+    
+    // Fallback to database check for JWT users
+    const dbUser = await getUserById(user.userId);
+    if (!dbUser) {
       return res.status(401).json({ error: 'User not found' });
     }
     
-    if (!user.emailVerified) {
+    if (!dbUser.emailVerified) {
       return res.status(403).json({ error: 'Email verification required. Please verify your email before accessing this feature.' });
     }
     
